@@ -1,0 +1,7 @@
+{
+  "root": "",
+  "inbox": "_inbox",
+  "fontUi": "",
+  "fontMono": "",
+  "hidden": [".git", "node_modules", "__pycache__", ".obsidian", ".venv", "venv", ".claude"]
+}

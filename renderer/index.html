@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>claude-work デスク</title>
+<link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <span id="root-name">claude-work</span>
+      <span>
+        <button id="btn-settings" title="設定（文字サイズ・フォント）">⚙</button>
+        <button id="btn-refresh" title="ツリー更新 (F5)">⟳</button>
+      </span>
+    </div>
+    <div id="tree"></div>
+    <section id="inbox">
+      <div id="inbox-header">📥 _inbox<button id="btn-paste" title="クリップボードを_inboxへ (Ctrl+V)">📋</button><button id="btn-clear-feed" title="表示をクリア">✕</button><span class="hint">ドロップ/Ctrl+Vで受領</span></div>
+      <div id="inbox-feed"></div>
+    </section>
+    <div id="sidebar-footer">ファイルはドラッグで外に出せます</div>
+  </aside>
+  <div id="splitter" title="ドラッグで幅調整"></div>
+  <main id="main">
+    <section id="preview">
+      <div id="preview-header">
+        <span id="preview-title">ファイルを選ぶとここに表示</span>
+        <span id="preview-actions"></span>
+      </div>
+      <div id="preview-body">
+        <div class="welcome">
+          <h2>claude-work デスク</h2>
+          <p>左のツリーからファイルをクリック → プレビュー</p>
+          <p>ファイルを<b>ウィンドウの外へドラッグ</b> → Explorer やチャットに取り出し</p>
+          <p>ファイルを<b>この窓にドロップ</b> → <code>_inbox/</code> に受領</p>
+          <p>ダブルクリック → 既定のアプリで開く ／ 右クリック → メニュー</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="drop-overlay"><div class="drop-msg">📥 _inbox に入れる</div></div>
+<div id="zoom-toast"></div>
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <h3>⚙ 設定</h3>
+    <label>ワークスペースフォルダ</label>
+    <div class="root-row"><span id="set-root-path"></span><button id="set-root-change">変更…</button></div>
+    <label>文字サイズ <span id="zoom-val">100%</span>（Ctrl+ホイールでも変更可）</label>
+    <input type="range" id="set-zoom" min="50" max="250" step="5" value="100">
+    <label>フォント（画面全体・マークダウン表示）</label>
+    <select id="set-font-ui">
+      <option value="">既定（Segoe UI / Yu Gothic UI）</option>
+      <option value="Meiryo">メイリオ</option>
+      <option value="Yu Gothic">游ゴシック</option>
+      <option value="BIZ UDPGothic">BIZ UDPゴシック</option>
+      <option value="UD Digi Kyokasho N-R">UDデジタル教科書体</option>
+      <option value="MS PGothic">MS Pゴシック</option>
+      <option value="Noto Sans JP">Noto Sans JP</option>
+    </select>
+    <input type="text" id="set-font-ui-custom" placeholder="フォント名を直接入力（選択より優先）">
+    <label>フォント（コード・行番号・等幅）</label>
+    <select id="set-font-mono">
+      <option value="">既定（Consolas）</option>
+      <option value="Cascadia Code">Cascadia Code</option>
+      <option value="Cascadia Mono">Cascadia Mono</option>
+      <option value="BIZ UDGothic">BIZ UDゴシック（等幅）</option>
+      <option value="MS Gothic">MSゴシック</option>
+      <option value="Courier New">Courier New</option>
+    </select>
+    <input type="text" id="set-font-mono-custom" placeholder="フォント名を直接入力（選択より優先）">
+    <div class="settings-actions">
+      <button id="set-reset">初期値に戻す</button>
+      <button id="set-close">閉じる</button>
+    </div>
+  </div>
+</div>
+<div id="ctxmenu"></div>
+<script src="app.js"></script>
+</body>
+</html>
