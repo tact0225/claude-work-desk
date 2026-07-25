@@ -3,5 +3,24 @@
   "inbox": "_inbox",
   "fontUi": "",
   "fontMono": "",
-  "hidden": [".git", "node_modules", "__pycache__", ".obsidian", ".venv", "venv", ".claude"]
+  "hidden": [
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".obsidian",
+    ".venv",
+    "venv",
+    ".claude"
+  ],
+  "wikilinkDirs": [
+    "",
+    "wiki",
+    "wiki/sources",
+    "wiki/concepts",
+    "memory",
+    "plans",
+    "miaomada-wiki",
+    "miaomada-wiki/sources",
+    "skills"
+  ]
 }

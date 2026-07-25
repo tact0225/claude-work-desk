@@ -10,6 +10,9 @@ const DEFAULTS = {
   hidden: ['.git', 'node_modules', '__pycache__', '.obsidian', '.venv', 'venv', '.claude'],
   fontUi: '',
   fontMono: '',
+  // [[ページ名]] を探すディレクトリ（root 相対・先頭から順に評価）。'' は root 直下。
+  // 常に「そのmdと同じフォルダ」が最優先で、その後にこのリストを見る。
+  wikilinkDirs: ['', 'wiki', 'wiki/sources', 'wiki/concepts', 'memory', 'plans', 'skills'],
 }
 let config = { ...DEFAULTS }
 
@@ -136,9 +139,10 @@ ipcMain.handle('read-file', async (_e, filePath) => {
   const lineCount = source.split('\n').length
 
   if (ext === '.md' || ext === '.markdown') {
-    const { marked } = require('marked')
-    let html = marked.parse(source, { async: false })
-    html = resolveMdImages(html, path.dirname(filePath))
+    const { renderMarkdown } = require('./wikilink')
+    const mdDir = path.dirname(filePath)
+    let html = renderMarkdown(source, mdDir, { root: rootDir(), dirs: config.wikilinkDirs })
+    html = resolveMdImages(html, mdDir)
     return { ...base, kind: 'markdown', html, sourceHtml: highlight(source, '.md'), lineCount }
   }
   return { ...base, kind: 'code', html: highlight(source, ext), lineCount }

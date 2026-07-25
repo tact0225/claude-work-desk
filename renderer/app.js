@@ -5,6 +5,7 @@ let selectedRow = null
 let currentFile = null
 let mdMode = 'rendered' // 'rendered' | 'source'
 let internalDragPath = null // ツリーからの持ち出し中は自ウィンドウへのドロップを無視する
+let navHistory = [] // wikilink を辿った履歴（戻る用）
 const openDirs = new Set() // F5リロード後に展開状態を復元する
 
 init()
@@ -159,10 +160,22 @@ async function openPreview(p) {
   renderPreview(res)
 }
 
+function goBack() {
+  const prev = navHistory.pop()
+  if (prev) openPreview(prev)
+}
+
 function renderPreview(res) {
   $('#preview-title').textContent = `${res.name}  (${fmtSize(res.size)})`
   const actions = $('#preview-actions')
   actions.innerHTML = ''
+  if (navHistory.length) {
+    const btnBack = document.createElement('button')
+    btnBack.textContent = '←'
+    btnBack.title = '直前のノートに戻る (Alt+←)'
+    btnBack.onclick = goBack
+    actions.appendChild(btnBack)
+  }
   if (res.kind === 'markdown') {
     const btn = document.createElement('button')
     btn.textContent = mdMode === 'rendered' ? 'ソース表示' : 'プレビュー表示'
@@ -506,8 +519,17 @@ function setupGlobal() {
     if (!sel) return
     showMenu(e, [['選択をコピー', () => navigator.clipboard.writeText(sel)]])
   })
+  // [[ページ名]] のクリックで対象ノートへ飛ぶ（解決済みのものだけ data-wiki を持つ）
+  $('#preview-body').addEventListener('click', (e) => {
+    const a = e.target.closest('a.wikilink[data-wiki]')
+    if (!a) return
+    e.preventDefault()
+    if (currentFile) navHistory.push(currentFile.path)
+    openPreview(a.dataset.wiki)
+  })
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F5') { e.preventDefault(); loadTreeRoot() }
+    if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack() }
     if (e.key === 'Escape') { hideCtxMenu(); $('#settings-overlay').classList.remove('show') }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteToInbox() }
     if (e.ctrlKey && (e.key === '+' || e.key === '=' || e.key === ';')) { e.preventDefault(); changeZoom(0.1) }

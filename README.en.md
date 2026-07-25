@@ -12,6 +12,7 @@ Note: the UI is currently Japanese-only.
 
 - **Tree view** of your whole workspace (lazy-loaded, fast)
 - **Preview**: rendered Markdown (toggle to source with line numbers, copy buttons on code blocks, draggable table column widths), syntax-highlighted code with line numbers, `.docx`, images, PDF
+- **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` button / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links. Search directories are configured via `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they mark pages you haven't written yet.
 - **Inbox**: drop files anywhere on the window → copied into your workspace's `_inbox/`, with a chat-like receipt feed that fades after a minute. **Ctrl+V** pastes clipboard content (files / screenshots → .png / text → .md)
 - **Drag out**: drag any file from the tree straight into Explorer or a chat app
 - **Copy WSL path**: right-click → copy `/home/...`-style path, ready to paste into a Claude Code prompt

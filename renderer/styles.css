@@ -113,6 +113,16 @@ body.resizing #preview-body { pointer-events: none; }
 .md-body li { margin: 3px 0; }
 .md-body a { color: var(--accent); text-decoration: none; }
 .md-body a:hover { text-decoration: underline; }
+/* [[ページ名]]。解決済みは辿れるリンク、未作成は「まだ書いてない知識の印」として淡く残す */
+.md-body a.wikilink {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid var(--accent-dim); cursor: pointer;
+}
+.md-body a.wikilink:hover { border-bottom-color: var(--accent); text-decoration: none; }
+.md-body .wikilink.missing {
+  color: var(--muted); border-bottom: 1px dashed var(--muted);
+  cursor: help; opacity: 0.75;
+}
 .md-body code { background: #2b3037; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); font-size: 12.5px; }
 .md-body pre { position: relative; background: #171a1f; border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; }
 .copy-btn {
