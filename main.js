@@ -91,7 +91,47 @@ ipcMain.handle('get-config', () => ({
   hidden: config.hidden,
   fontUi: config.fontUi || '',
   fontMono: config.fontMono || '',
+  version: app.getVersion(),
 }))
+
+// ---------- パス欄（アドレスバー）----------
+
+// ワークスペースのルートが UNC なら、そこからディストロ名を借りる
+// （\\wsl.localhost\Ubuntu\home\me\claude-work → \\wsl.localhost\Ubuntu）
+function wslUncPrefix() {
+  const m = String(rootDir()).replace(/\//g, '\\').match(/^\\\\wsl(?:\.localhost|\$)\\([^\\]+)/)
+  return m ? `\\\\wsl.localhost\\${m[1]}` : null
+}
+
+// 貼り付けられた文字列を、このプロセスから見えるパスに直す。
+// Claude Code が吐く WSL パス（/home/... ・/mnt/c/...）をそのまま貼れるようにするのが主目的。
+function normalizeInputPath(input) {
+  let s = String(input || '').trim().replace(/^["']|["']$/g, '').trim()
+  if (!s) return ''
+  if (process.platform !== 'win32') return s // WSLg 等で直接動かす場合はそのまま
+  if (/^[a-zA-Z]:[\\/]/.test(s)) return s.replace(/\//g, '\\')
+  if (/^[\\/]{2}/.test(s)) return s.replace(/\//g, '\\')
+  const mnt = s.match(/^\/mnt\/([a-zA-Z])(\/.*)?$/)
+  if (mnt) return `${mnt[1].toUpperCase()}:` + (mnt[2] || '/').replace(/\//g, '\\')
+  if (s.startsWith('/')) {
+    const pre = wslUncPrefix()
+    if (pre) return pre + s.replace(/\//g, '\\')
+  }
+  return s
+}
+
+// フォルダなら「そこを表示」、ファイルなら「親を表示してその1枚をプレビュー」
+ipcMain.handle('resolve-target', async (_e, input) => {
+  const p = normalizeInputPath(input)
+  if (!p) return { ok: false, error: 'パスが空です' }
+  try {
+    const st = await fsp.stat(p)
+    if (st.isDirectory()) return { ok: true, path: p, isDir: true, filePath: null }
+    return { ok: true, path: path.dirname(p), isDir: false, filePath: p }
+  } catch (e) {
+    return { ok: false, path: p, error: `開けません: ${p}` }
+  }
+})
 
 ipcMain.handle('choose-root', async () => {
   const r = await dialog.showOpenDialog({
@@ -143,9 +183,20 @@ ipcMain.handle('read-file', async (_e, filePath) => {
     const mdDir = path.dirname(filePath)
     let html = renderMarkdown(source, mdDir, { root: rootDir(), dirs: config.wikilinkDirs })
     html = resolveMdImages(html, mdDir)
-    return { ...base, kind: 'markdown', html, sourceHtml: highlight(source, '.md'), lineCount }
+    return { ...base, kind: 'markdown', html, sourceHtml: highlight(source, '.md'), source, lineCount }
   }
-  return { ...base, kind: 'code', html: highlight(source, ext), lineCount }
+  return { ...base, kind: 'code', html: highlight(source, ext), source, lineCount }
+})
+
+// 入力モードの保存。テキスト系（markdown / code）だけが対象で、改行は LF のまま書く。
+ipcMain.handle('write-file', async (_e, filePath, content) => {
+  try {
+    await fsp.writeFile(filePath, content, 'utf8')
+    const st = await fsp.stat(filePath)
+    return { ok: true, size: st.size }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
 })
 
 async function appendDropLog(entries) {

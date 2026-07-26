@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('api', {
   chooseRoot: () => ipcRenderer.invoke('choose-root'),
   readDir: (p) => ipcRenderer.invoke('read-dir', p),
   readFile: (p) => ipcRenderer.invoke('read-file', p),
+  writeFile: (p, content) => ipcRenderer.invoke('write-file', p, content),
+  resolveTarget: (input) => ipcRenderer.invoke('resolve-target', input),
   dropFiles: (paths) => ipcRenderer.invoke('drop-files', paths),
   pasteClipboard: () => ipcRenderer.invoke('paste-clipboard'),
   getDropLog: () => ipcRenderer.invoke('get-drop-log'),

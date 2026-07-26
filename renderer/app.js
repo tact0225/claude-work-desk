@@ -8,6 +8,15 @@ let internalDragPath = null // ツリーからの持ち出し中は自ウィン�
 let navHistory = [] // wikilink を辿った履歴（戻る用）
 const openDirs = new Set() // F5リロード後に展開状態を復元する
 
+// ツリーが今表示しているフォルダ。CONFIG.root（ワークスペース＝_inboxの置き場）とは別物で、
+// パス欄で worktree レーンなど外のフォルダに移っても _inbox の投入先は動かさない。
+let browseRoot = ''
+
+// 入力モード（書き込み）の状態。既定はプレビュー＝読むだけ。
+let editMode = false
+let editDirty = false
+let editorEl = null
+
 init()
 
 async function init() {
@@ -15,20 +24,133 @@ async function init() {
   applyFonts()
   setupDrop()
   setupGlobal()
+  setupPathBar()
   if (!CONFIG.rootOk) { showRootPicker(); return }
-  $('#root-name').textContent = CONFIG.rootName
-  $('#root-name').title = CONFIG.root
-  await loadTreeRoot()
+  await setBrowseRoot(await startingRoot())
+}
+
+// 前回見ていたフォルダを復元。撤収済みレーン等で消えていたら黙ってワークスペースへ戻る
+async function startingRoot() {
+  const saved = localStorage.browseRoot
+  if (saved && saved !== CONFIG.root) {
+    const r = await api.resolveTarget(saved)
+    if (r.ok && r.isDir) return r.path
+    localStorage.removeItem('browseRoot')
+  }
+  return CONFIG.root
 }
 
 // ルート変更（初回設定・設定パネルからの変更 共通）
 async function reloadRoot() {
   CONFIG = await api.getConfig()
   if (!CONFIG.rootOk) { showRootPicker(); return }
-  $('#root-name').textContent = CONFIG.rootName
-  $('#root-name').title = CONFIG.root
+  localStorage.removeItem('browseRoot')
+  await setBrowseRoot(CONFIG.root)
+}
+
+// ---------- パス欄（アドレスバー） ----------
+
+function baseName(p) {
+  const s = String(p).replace(/[\\/]+$/, '')
+  return s.split(/[\\/]/).pop() || s
+}
+
+function samePath(a, b) {
+  const n = (p) => String(p || '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
+  return n(a) === n(b)
+}
+
+function parentOf(p) {
+  const s = String(p).replace(/[\\/]+$/, '')
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'))
+  if (i <= 0) return null
+  const up = s.slice(0, i)
+  return up.replace(/[\\/]+$/, '').length >= 2 ? up : null
+}
+
+async function setBrowseRoot(dir, { record = false } = {}) {
+  browseRoot = dir
+  if (samePath(dir, CONFIG.root)) localStorage.removeItem('browseRoot')
+  else localStorage.browseRoot = dir
+  if (record) pushPathHistory(dir)
+
+  const away = !samePath(dir, CONFIG.root)
+  $('#path-input').value = dir
+  $('#path-input').title = dir
+  $('#root-name').textContent = baseName(dir)
+  $('#root-name').title = away ? `${dir}\n（_inbox の投入先は ${CONFIG.inbox} のまま）` : dir
+  $('#root-name').classList.toggle('away', away)
+  $('#inbox-header').title = `投入先: ${CONFIG.inbox}`
   openDirs.clear()
   await loadTreeRoot()
+}
+
+async function gotoPath(input) {
+  const r = await api.resolveTarget(input)
+  if (!r.ok) { pathBarError(r.error); return }
+  await setBrowseRoot(r.path, { record: true })
+  if (r.filePath) openPreview(r.filePath) // ファイルを貼られたら親を開いてその1枚を出す
+}
+
+function pathBarError(msg) {
+  const el = $('#path-input')
+  el.classList.add('bad')
+  el.title = msg
+  setTimeout(() => el.classList.remove('bad'), 1400)
+}
+
+function pathHistory() {
+  try { return JSON.parse(localStorage.pathHistory || '[]') } catch (e) { return [] }
+}
+
+function pushPathHistory(p) {
+  const list = pathHistory().filter(x => !samePath(x, p))
+  list.unshift(p)
+  localStorage.pathHistory = JSON.stringify(list.slice(0, 20))
+}
+
+function hidePathHist() { $('#path-hist').classList.remove('show') }
+
+function togglePathHist() {
+  const box = $('#path-hist')
+  if (box.classList.contains('show')) { hidePathHist(); return }
+  const list = pathHistory()
+  box.innerHTML = ''
+  if (!list.length) {
+    box.innerHTML = '<div class="hist-empty">履歴はまだありません</div>'
+  } else {
+    for (const p of list) {
+      const it = document.createElement('div')
+      it.className = 'hist-item' + (samePath(p, browseRoot) ? ' current' : '')
+      it.textContent = p
+      it.title = p
+      it.addEventListener('click', () => { hidePathHist(); gotoPath(p) })
+      box.appendChild(it)
+    }
+    const clear = document.createElement('div')
+    clear.className = 'hist-clear'
+    clear.textContent = '履歴を消す'
+    clear.addEventListener('click', () => { localStorage.removeItem('pathHistory'); hidePathHist() })
+    box.appendChild(clear)
+  }
+  box.classList.add('show')
+}
+
+function setupPathBar() {
+  const input = $('#path-input')
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { hidePathHist(); gotoPath(input.value) }
+    if (e.key === 'Escape') { input.value = browseRoot; input.blur(); hidePathHist() }
+    if (e.key === 'ArrowDown') { e.preventDefault(); togglePathHist() }
+  })
+  input.addEventListener('focus', () => input.select())
+  $('#btn-path-go').addEventListener('click', () => gotoPath(input.value))
+  $('#btn-path-hist').addEventListener('click', (e) => { e.stopPropagation(); togglePathHist() })
+  $('#btn-home').addEventListener('click', () => { if (CONFIG.rootOk) setBrowseRoot(CONFIG.root) })
+  $('#btn-up').addEventListener('click', () => {
+    const up = parentOf(browseRoot)
+    if (up) gotoPath(up)
+  })
 }
 
 function showRootPicker() {
@@ -57,7 +179,7 @@ async function loadTreeRoot() {
   const tree = $('#tree')
   tree.innerHTML = '<div class="loading">読み込み中…</div>'
   const box = document.createElement('div')
-  await loadChildren(CONFIG.root, box, 0)
+  await loadChildren(browseRoot || CONFIG.root, box, 0)
   tree.innerHTML = ''
   tree.appendChild(box)
 }
@@ -149,6 +271,7 @@ function fileIcon(name) {
 // ---------- プレビュー ----------
 
 async function openPreview(p) {
+  if (!await leaveEditMode()) return
   const body = $('#preview-body')
   body.innerHTML = '<div class="loading">読み込み中…</div>'
   let res
@@ -166,21 +289,37 @@ function goBack() {
 }
 
 function renderPreview(res) {
-  $('#preview-title').textContent = `${res.name}  (${fmtSize(res.size)})`
+  updatePreviewTitle(res)
   const actions = $('#preview-actions')
   actions.innerHTML = ''
-  if (navHistory.length) {
+  if (navHistory.length && !editMode) {
     const btnBack = document.createElement('button')
     btnBack.textContent = '←'
     btnBack.title = '直前のノートに戻る (Alt+←)'
     btnBack.onclick = goBack
     actions.appendChild(btnBack)
   }
-  if (res.kind === 'markdown') {
+  if (res.kind === 'markdown' && !editMode) {
     const btn = document.createElement('button')
     btn.textContent = mdMode === 'rendered' ? 'ソース表示' : 'プレビュー表示'
     btn.onclick = () => { mdMode = mdMode === 'rendered' ? 'source' : 'rendered'; renderPreview(res) }
     actions.appendChild(btn)
+  }
+  if (isEditable(res)) {
+    if (editMode) {
+      const btnSave = document.createElement('button')
+      btnSave.id = 'btn-save'
+      btnSave.textContent = '保存'
+      btnSave.title = 'このファイルに書き込む (Ctrl+S)'
+      btnSave.onclick = saveEdit
+      actions.appendChild(btnSave)
+    }
+    const btnEdit = document.createElement('button')
+    btnEdit.textContent = '入力'
+    if (editMode) btnEdit.classList.add('toggled')
+    btnEdit.title = editMode ? '入力モードを抜けてプレビューに戻る' : '書き込みモードにする（既定は読むだけ）'
+    btnEdit.onclick = toggleEdit
+    actions.appendChild(btnEdit)
   }
   const btnExp = document.createElement('button')
   btnExp.textContent = 'Explorer'
@@ -193,6 +332,7 @@ function renderPreview(res) {
   actions.append(btnExp, btnOpen)
 
   const body = $('#preview-body')
+  if (editMode && isEditable(res)) { renderEditor(res); return }
   switch (res.kind) {
     case 'markdown':
       if (mdMode === 'rendered') { body.innerHTML = `<div class="md-body">${res.html}</div>`; addCopyButtons(body); enhanceTables(body) }
@@ -220,6 +360,87 @@ function renderPreview(res) {
       break
     default:
       body.innerHTML = `<div class="welcome error"><p>${escapeHtml(res.message || '表示できません')}</p></div>`
+  }
+}
+
+// ---------- 入力モード（書き込み） ----------
+// 既定はあくまでプレビュー（読むだけ）。「入力」を押した時だけ textarea に切り替わる。
+
+function isEditable(res) {
+  return !!res && typeof res.source === 'string' && (res.kind === 'markdown' || res.kind === 'code')
+}
+
+function updatePreviewTitle(res) {
+  const f = res || currentFile
+  if (!f) return
+  const mark = editMode ? (editDirty ? '● 入力中 ' : '入力中 ') : ''
+  $('#preview-title').textContent = `${mark}${f.name}  (${fmtSize(f.size)})`
+  $('#preview-title').classList.toggle('editing', editMode)
+}
+
+function renderEditor(res) {
+  const body = $('#preview-body')
+  body.innerHTML = '<div class="editwrap"><textarea class="editor" spellcheck="false"></textarea></div>'
+  editorEl = body.querySelector('.editor')
+  editorEl.value = res.source
+  editorEl.addEventListener('input', () => {
+    if (!editDirty) { editDirty = true; updatePreviewTitle() }
+  })
+  editorEl.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveEdit() }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      const s = editorEl.selectionStart
+      editorEl.setRangeText('  ', s, editorEl.selectionEnd, 'end')
+      editDirty = true
+      updatePreviewTitle()
+    }
+  })
+  editorEl.focus()
+}
+
+function toggleEdit() {
+  if (editMode) { leaveEditMode().then(ok => { if (ok) renderPreview(currentFile) }); return }
+  editMode = true
+  editDirty = false
+  renderPreview(currentFile)
+}
+
+// 入力モードを抜ける（他ファイルへ移る時も通す）。未保存があれば必ず訊く。
+// 破棄した時はディスクの内容を読み直す＝画面に編集途中の文字が残らない。
+async function leaveEditMode() {
+  if (!editMode) return true
+  if (editDirty && !confirm('保存していない変更があります。破棄して進みますか？')) return false
+  const wasDirty = editDirty
+  editMode = false
+  editDirty = false
+  editorEl = null
+  if (wasDirty && currentFile) {
+    try { currentFile = await api.readFile(currentFile.path) } catch (e) { /* 消えていたら現状のまま */ }
+  }
+  return true
+}
+
+async function saveEdit() {
+  if (!editMode || !editorEl || !currentFile) return
+  const content = editorEl.value
+  const caret = [editorEl.selectionStart, editorEl.selectionEnd]
+  const scroll = editorEl.scrollTop
+  const r = await api.writeFile(currentFile.path, content)
+  if (!r.ok) { alert('保存に失敗: ' + r.error); return }
+  editDirty = false
+  // 保存後に読み直す＝プレビューへ戻した時に古い内容が出ない（html/行数も更新される）
+  try { currentFile = await api.readFile(currentFile.path) } catch (e) { currentFile.size = r.size }
+  renderPreview(currentFile)
+  if (editorEl) {
+    editorEl.scrollTop = scroll
+    editorEl.setSelectionRange(caret[0], caret[1])
+  }
+  const btn = $('#btn-save')
+  if (btn) {
+    btn.textContent = '✓ 保存した'
+    btn.classList.add('saved')
+    setTimeout(() => { if ($('#btn-save') === btn) { btn.textContent = '保存'; btn.classList.remove('saved') } }, 1600)
   }
 }
 
@@ -493,6 +714,7 @@ function setupSettings() {
 }
 
 function syncSettingsUI() {
+  $('#set-version').textContent = CONFIG.version ? `v${CONFIG.version}` : ''
   $('#set-root-path').textContent = CONFIG.root || '(未設定)'
   $('#set-root-path').title = CONFIG.root || ''
   const pct = Math.round(zoom * 100)
@@ -504,6 +726,10 @@ function syncSettingsUI() {
     if ([...sel.options].some(o => o.value === val)) { sel.value = val; $(customId).value = '' }
     else { sel.value = ''; $(customId).value = val }
   }
+}
+
+function isTypingTarget(t) {
+  return !!t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)
 }
 
 function setupGlobal() {
@@ -528,13 +754,20 @@ function setupGlobal() {
     openPreview(a.dataset.wiki)
   })
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'F5') { e.preventDefault(); loadTreeRoot() }
+    // 文字を打つ場所（入力モードのtextarea・パス欄・設定の入力）ではアプリのショートカットを譲る。
+    // 特に Ctrl+V は _inbox 投入に奪われると編集中に貼り付けられなくなる。
+    const typing = isTypingTarget(e.target)
+    if (e.key === 'F5' && !typing) { e.preventDefault(); loadTreeRoot() }
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack() }
-    if (e.key === 'Escape') { hideCtxMenu(); $('#settings-overlay').classList.remove('show') }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteToInbox() }
+    if (e.key === 'Escape') { hideCtxMenu(); hidePathHist(); $('#settings-overlay').classList.remove('show') }
+    if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteToInbox() }
     if (e.ctrlKey && (e.key === '+' || e.key === '=' || e.key === ';')) { e.preventDefault(); changeZoom(0.1) }
     if (e.ctrlKey && e.key === '-') { e.preventDefault(); changeZoom(-0.1) }
     if (e.ctrlKey && e.key === '0') { e.preventDefault(); changeZoom(0) }
   })
-  window.addEventListener('click', hideCtxMenu)
+  window.addEventListener('click', () => { hideCtxMenu(); hidePathHist() })
+  // 入力モードで未保存のまま閉じるのを止める
+  window.addEventListener('beforeunload', (e) => {
+    if (editMode && editDirty) { e.preventDefault(); e.returnValue = '' }
+  })
 }

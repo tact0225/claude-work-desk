@@ -11,7 +11,10 @@ Note: the UI is currently Japanese-only.
 ## Features
 
 - **Tree view** of your whole workspace (lazy-loaded, fast)
+- **Path bar** (top): paste a folder's full path and hit Enter to browse it — built for peeking into `git worktree` lanes (`~/claude-work-xxx`) with a single paste. WSL paths (`/home/...`, `/mnt/c/...`) work as-is and are converted to UNC automatically. `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that file.
+  - While you're outside the workspace the folder name turns blue with a `↗` marker. **The `_inbox/` drop target never moves** — drops always land in your real workspace, even while peeking at a lane.
 - **Preview**: rendered Markdown (toggle to source with line numbers, copy buttons on code blocks, draggable table column widths), syntax-highlighted code with line numbers, `.docx`, images, PDF
+- **Write mode**: the **入力** (input) button in the preview header turns the pane into an editor for Markdown/text files. Read-only is the default — pressing the button flips it into write mode and the button **inverts to solid blue**, so the writable state is unmistakable. `Ctrl+S` (or `保存`) saves; navigating away with unsaved changes prompts first (the title shows `● 入力中`).
 - **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` button / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links. Search directories are configured via `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they mark pages you haven't written yet.
 - **Inbox**: drop files anywhere on the window → copied into your workspace's `_inbox/`, with a chat-like receipt feed that fades after a minute. **Ctrl+V** pastes clipboard content (files / screenshots → .png / text → .md)
 - **Drag out**: drag any file from the tree straight into Explorer or a chat app
@@ -43,6 +46,7 @@ To update: `git pull` then re-run `bash sync_to_windows.sh`. Your settings survi
 - Must run as a native Windows app (drag & drop from Explorer doesn't reach WSLg windows)
 - File changes inside WSL are not auto-detected (the 9P protocol has no change notification) — refresh with F5
 - Dragging out of the tree always **copies** (never moves)
+- Write mode is a plain textarea (no highlighting, completion, or diff while editing). It's meant for **quick one-line fixes**, not long-form writing or code editing. Saving overwrites in place with no backup, so use it on folders under version control
 - No preview for `.xlsx` / `.pptx` / legacy `.doc` (double-click opens the default app)
 
 ## Stance

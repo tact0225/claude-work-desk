@@ -7,6 +7,18 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div id="shell">
+<div id="pathbar">
+  <button id="btn-home" title="ワークスペースのルートに戻る">⌂</button>
+  <button id="btn-up" title="1つ上のフォルダへ">↑</button>
+  <div id="path-input-wrap">
+    <input type="text" id="path-input" spellcheck="false" autocomplete="off"
+           placeholder="表示したいフォルダのフルパスを貼って Enter（WSLパス /home/... もそのままOK）">
+    <button id="btn-path-hist" title="履歴（Windowsのアドレスバー風）">▾</button>
+    <div id="path-hist"></div>
+  </div>
+  <button id="btn-path-go" title="ここを表示（Enter）">表示</button>
+</div>
 <div id="app">
   <aside id="sidebar">
     <div id="sidebar-header">
@@ -37,16 +49,19 @@
           <p>ファイルを<b>ウィンドウの外へドラッグ</b> → Explorer やチャットに取り出し</p>
           <p>ファイルを<b>この窓にドロップ</b> → <code>_inbox/</code> に受領</p>
           <p>ダブルクリック → 既定のアプリで開く ／ 右クリック → メニュー</p>
+          <p>上のパス欄にフルパスを貼って Enter → そのフォルダを表示（worktreeレーンの覗き見用）</p>
+          <p>プレビュー右上の<b>入力</b> → 書き込みモード（Ctrl+S で保存）</p>
         </div>
       </div>
     </section>
   </main>
 </div>
+</div>
 <div id="drop-overlay"><div class="drop-msg">📥 _inbox に入れる</div></div>
 <div id="zoom-toast"></div>
 <div id="settings-overlay">
   <div id="settings-panel">
-    <h3>⚙ 設定</h3>
+    <h3>⚙ 設定 <span id="set-version"></span></h3>
     <label>ワークスペースフォルダ</label>
     <div class="root-row"><span id="set-root-path"></span><button id="set-root-change">変更…</button></div>
     <label>文字サイズ <span id="zoom-val">100%</span>（Ctrl+ホイールでも変更可）</label>
