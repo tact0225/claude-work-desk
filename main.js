@@ -291,6 +291,11 @@ ipcMain.on('drag-start', (event, filePath) => {
   event.sender.startDrag({ file: filePath, icon: DRAG_ICON })
 })
 
+// 入力モードの Undo/Redo。自前で履歴を持たず Chromium の編集履歴をそのまま叩く
+// ＝ボタンと Ctrl+Z が同じ1本の履歴を共有し、日本語IMEの変換も1操作として扱われる。
+ipcMain.on('editor-undo', (event) => event.sender.undo())
+ipcMain.on('editor-redo', (event) => event.sender.redo())
+
 ipcMain.handle('open-path', (_e, p) => shell.openPath(p))
 ipcMain.handle('show-in-folder', (_e, p) => shell.showItemInFolder(p))
 

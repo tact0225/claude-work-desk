@@ -309,11 +309,14 @@ function renderPreview(res) {
   }
   if (isEditable(res)) {
     if (editMode) {
-      const btnSave = document.createElement('button')
+      // Undo/Redo は入力モードの時だけ出す（読むだけの時は不要なので置かない）
+      const btnUndo = editToolButton('↶', '元に戻す (Ctrl+Z)', () => runEditCmd('undo'))
+      const btnRedo = editToolButton('↷', 'やり直す (Ctrl+Shift+Z / Ctrl+Y)', () => runEditCmd('redo'))
+      btnUndo.classList.add('icon-btn')
+      btnRedo.classList.add('icon-btn')
+      actions.append(btnUndo, btnRedo)
+      const btnSave = editToolButton('保存', 'このファイルに書き込む (Ctrl+S)', saveEdit)
       btnSave.id = 'btn-save'
-      btnSave.textContent = '保存'
-      btnSave.title = 'このファイルに書き込む (Ctrl+S)'
-      btnSave.onclick = saveEdit
       actions.appendChild(btnSave)
     }
     const btnEdit = document.createElement('button')
@@ -372,6 +375,29 @@ function isEditable(res) {
   return !!res && typeof res.source === 'string' && (res.kind === 'markdown' || res.kind === 'code')
 }
 
+// 入力モードのツールバー用ボタン。mousedown を止めて textarea からフォーカスを奪わない
+// ＝押した瞬間もカーソルは編集中の位置に残り、Undo/Redo が編集欄に当たる。
+function editToolButton(label, title, fn) {
+  const b = document.createElement('button')
+  b.textContent = label
+  b.title = title
+  b.addEventListener('mousedown', (e) => e.preventDefault())
+  b.onclick = fn
+  return b
+}
+
+function runEditCmd(cmd) {
+  if (!editMode || !editorEl) return
+  editorEl.focus() // パス欄などに移っていた場合の保険
+  if (cmd === 'undo') api.editorUndo(); else api.editorRedo()
+}
+
+// 保存済みの内容と一致していれば「未保存」印を消す（Undoで元に戻した時も消える）
+function refreshDirty() {
+  const dirty = !!editorEl && !!currentFile && editorEl.value !== currentFile.source
+  if (dirty !== editDirty) { editDirty = dirty; updatePreviewTitle() }
+}
+
 function updatePreviewTitle(res) {
   const f = res || currentFile
   if (!f) return
@@ -385,17 +411,20 @@ function renderEditor(res) {
   body.innerHTML = '<div class="editwrap"><textarea class="editor" spellcheck="false"></textarea></div>'
   editorEl = body.querySelector('.editor')
   editorEl.value = res.source
-  editorEl.addEventListener('input', () => {
-    if (!editDirty) { editDirty = true; updatePreviewTitle() }
-  })
+  editorEl.addEventListener('input', refreshDirty)
   editorEl.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveEdit() }
     if (e.key === 'Tab') {
       e.preventDefault()
-      const s = editorEl.selectionStart
-      editorEl.setRangeText('  ', s, editorEl.selectionEnd, 'end')
-      editDirty = true
-      updatePreviewTitle()
+      // insertText は Chromium の編集履歴に乗る＝Tabで入れた分も Ctrl+Z で戻せる
+      // （setRangeText は履歴に乗らないので、使えない時だけの保険）
+      let ok = false
+      try { ok = document.execCommand('insertText', false, '  ') } catch (err) { ok = false }
+      if (!ok) {
+        const s = editorEl.selectionStart
+        editorEl.setRangeText('  ', s, editorEl.selectionEnd, 'end')
+        refreshDirty()
+      }
     }
   })
   editorEl.focus()
@@ -426,18 +455,15 @@ async function leaveEditMode() {
 async function saveEdit() {
   if (!editMode || !editorEl || !currentFile) return
   const content = editorEl.value
-  const caret = [editorEl.selectionStart, editorEl.selectionEnd]
-  const scroll = editorEl.scrollTop
   const r = await api.writeFile(currentFile.path, content)
   if (!r.ok) { alert('保存に失敗: ' + r.error); return }
-  editDirty = false
-  // 保存後に読み直す＝プレビューへ戻した時に古い内容が出ない（html/行数も更新される）
-  try { currentFile = await api.readFile(currentFile.path) } catch (e) { currentFile.size = r.size }
-  renderPreview(currentFile)
-  if (editorEl) {
-    editorEl.scrollTop = scroll
-    editorEl.setSelectionRange(caret[0], caret[1])
-  }
+  // 保存後に読み直す＝プレビューへ戻した時に古い内容が出ない（html/行数も更新される）。
+  // ただし textarea は作り直さない＝保存を挟んでも Undo 履歴とカーソル位置が切れない。
+  // 読み直せなかった時も source は書いた内容に更新する（でないと ● が消えず未保存に見える）
+  try { currentFile = await api.readFile(currentFile.path) }
+  catch (e) { currentFile.size = r.size; currentFile.source = content }
+  refreshDirty() // 保存中に打ち続けていた場合は ● が残る
+  updatePreviewTitle()
   const btn = $('#btn-save')
   if (btn) {
     btn.textContent = '✓ 保存した'

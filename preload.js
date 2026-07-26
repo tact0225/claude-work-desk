@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   pasteClipboard: () => ipcRenderer.invoke('paste-clipboard'),
   getDropLog: () => ipcRenderer.invoke('get-drop-log'),
   dragStart: (p) => ipcRenderer.send('drag-start', p),
+  editorUndo: () => ipcRenderer.send('editor-undo'),
+  editorRedo: () => ipcRenderer.send('editor-redo'),
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   showInFolder: (p) => ipcRenderer.invoke('show-in-folder', p),
   pathForFile: (file) => webUtils.getPathForFile(file),

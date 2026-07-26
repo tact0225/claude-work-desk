@@ -158,6 +158,11 @@ body.resizing #preview-body { pointer-events: none; }
 }
 #preview-actions button.toggled:hover { color: #14181d; }
 #preview-actions button.saved { border-color: #6fd388; color: #6fd388; }
+/* Undo/Redo の矢印。設定でUIフォントを変えても記号が豆腐にならないよう記号フォントを足す */
+#preview-actions button.icon-btn {
+  font-family: var(--font-ui), "Segoe UI Symbol", sans-serif;
+  padding: 3px 9px; font-size: 14px; line-height: 1.1;
+}
 #preview-body { flex: 1; overflow: auto; min-height: 0; }
 
 /* 入力モード（書き込み用エディタ） */
