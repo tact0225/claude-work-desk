@@ -235,8 +235,9 @@ function makeNode(en, depth) {
     }
   }
 
-  row.addEventListener('click', () => {
-    if (en.isDir) { toggleDir() } else { selectRow(row); openPreview(en.path) }
+  row.addEventListener('click', async () => {
+    // 入力モードの確認で開くのを取り消した時は選択も動かさない（表示中のファイルと選択をずらさない）
+    if (en.isDir) { toggleDir() } else if (await openPreview(en.path)) selectRow(row)
   })
   row.addEventListener('dblclick', () => api.openPath(en.path))
   row.addEventListener('dragstart', (e) => {
@@ -271,16 +272,17 @@ function fileIcon(name) {
 // ---------- プレビュー ----------
 
 async function openPreview(p) {
-  if (!await leaveEditMode()) return
+  if (!await leaveEditMode()) return false
   const body = $('#preview-body')
   body.innerHTML = '<div class="loading">読み込み中…</div>'
   let res
   try { res = await api.readFile(p) } catch (e) {
     body.innerHTML = `<div class="welcome error"><p>読めません: ${escapeHtml(e.message)}</p></div>`
-    return
+    return false
   }
   currentFile = res
   renderPreview(res)
+  return true
 }
 
 function goBack() {
