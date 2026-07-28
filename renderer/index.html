@@ -29,7 +29,7 @@
     </div>
     <div id="tree"></div>
     <section id="inbox">
-      <div id="inbox-header">📥 _inbox<button id="btn-paste" data-i18n-title="tip.paste">📋</button><button id="btn-clear-feed" data-i18n-title="tip.clearFeed">✕</button><span class="hint" data-i18n="inbox.hint"></span></div>
+      <div id="inbox-header">📥 <span id="inbox-name">_inbox</span><button id="btn-paste" data-i18n-title="tip.paste">📋</button><button id="btn-clear-feed" data-i18n-title="tip.clearFeed">✕</button><span class="hint" data-i18n="inbox.hint"></span></div>
       <div id="inbox-feed"></div>
     </section>
     <div id="sidebar-footer" data-i18n="sidebar.footer"></div>
@@ -65,6 +65,8 @@
     <select id="set-lang"></select>
     <label data-i18n="set.workspace"></label>
     <div class="root-row"><span id="set-root-path"></span><button id="set-root-change" data-i18n="set.change"></button></div>
+    <label data-i18n="set.inbox"></label>
+    <input type="text" id="set-inbox" spellcheck="false" autocomplete="off" data-i18n-ph="ph.inbox">
     <label><span data-i18n="set.fontSize"></span> <span id="zoom-val">100%</span> <span data-i18n="set.fontSizeHint"></span></label>
     <input type="range" id="set-zoom" min="50" max="250" step="5" value="100">
     <label data-i18n="set.fontUi"></label>

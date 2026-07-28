@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron')
 contextBridge.exposeInMainWorld('api', {
   getConfig: () => ipcRenderer.invoke('get-config'),
   setLang: (lang) => ipcRenderer.invoke('set-lang', lang),
+  setInbox: (name) => ipcRenderer.invoke('set-inbox', name),
   chooseRoot: () => ipcRenderer.invoke('choose-root'),
   readDir: (p) => ipcRenderer.invoke('read-dir', p),
   readFile: (p) => ipcRenderer.invoke('read-file', p),

@@ -330,6 +330,8 @@ body.resizing #preview-body { pointer-events: none; }
   border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-size: 13px;
 }
 #settings-panel input[type="text"] { margin-top: 5px; }
+/* 弾かれた入力（ドロップ先フォルダ等）。パス欄と同じ赤で「戻された」ことを知らせる */
+#settings-panel input[type="text"].bad { border-color: #ff8f8f; color: #ff8f8f; }
 #settings-panel input[type="range"] { width: 100%; accent-color: var(--accent); }
 .root-row { display: flex; align-items: center; gap: 8px; }
 .root-row span {

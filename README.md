@@ -87,6 +87,7 @@ fixing one means editing a single file — see [Languages](#languages).*
 - **Undo/Redo** (`↶` `↷`) appear only in write mode. They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** — the editor element is never rebuilt on save
 - **Drag out**: drag any file from the tree straight into Explorer or a chat app (always a copy, never a move)
 - **More preview types**: `.docx`, images, PDF — plus draggable table column widths
+- **Pick your own drop folder**: `_inbox` is only the default. Set any folder under ⚙ — it is created if missing. It must stay *inside* the workspace, and that is not a formality: it is what stops a dropped file from landing in a worktree lane you were only peeking at. Symlinks and junctions pointing out of the workspace are rejected, and the check runs again at drop time, not only when you set it
 - **Display settings**: font size (Ctrl+wheel), UI/monospace font pickers, draggable sidebar width — all persisted
 
 ## Requirements

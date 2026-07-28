@@ -32,5 +32,20 @@ fi
 # 3) 辞書の穴 ＋ 使用キーとの突合
 node check-i18n.js || fail "i18n 辞書／キーの不整合"
 
+# 4) ドロップ先フォルダの検証（ワークスペース外への脱出を弾けているか）
+node test-inbox.js || fail "ドロップ先の検証ロジックが緩い"
+
+# 5) renderer が呼ぶ api.* が preload で公開されているか
+#    （公開し忘れは実行時まで分からず「押しても何も起きない」になる）
+MISSING_API=""
+for m in $(grep -oP 'api\.\K\w+' renderer/app.js | sort -u); do
+  grep -qP "^\s*$m\s*:" preload.js || MISSING_API="$MISSING_API $m"
+done
+if [ -n "$MISSING_API" ]; then
+  fail "preload.js に公開されていない api:$MISSING_API"
+else
+  note "api の公開面 OK ($(grep -oP 'api\.\K\w+' renderer/app.js | sort -u | wc -l)個)"
+fi
+
 echo
 [ $FAIL -eq 0 ] && { echo "check.sh: PASS"; exit 0; } || { echo "check.sh: FAIL"; exit 1; }

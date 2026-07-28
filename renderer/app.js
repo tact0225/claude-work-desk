@@ -23,15 +23,35 @@ init()
 
 const t = (key, vars) => I18N.t(key, vars)
 
+// 画面の文言に共通で差し込む値。ドロップ先フォルダ名は設定で変えられるので、
+// 「_inbox」を文言側にベタ書きしない（変えた瞬間に全部の案内が嘘になるため）。
+const uiVars = () => ({ inbox: (CONFIG && CONFIG.inboxName) || '_inbox' })
+
 // data-i18n=本文 / data-i18n-html=HTMLを含む本文 / data-i18n-title=ツールチップ / data-i18n-ph=プレースホルダ
 function applyI18n(scope = document) {
+  const v = uiVars()
   for (const el of scope.querySelectorAll('[data-i18n]')) {
-    if (el.dataset.i18nHtml !== undefined) el.innerHTML = t(el.dataset.i18n)
-    else el.textContent = t(el.dataset.i18n)
+    if (el.dataset.i18nHtml !== undefined) el.innerHTML = t(el.dataset.i18n, v)
+    else el.textContent = t(el.dataset.i18n, v)
   }
-  for (const el of scope.querySelectorAll('[data-i18n-title]')) el.title = t(el.dataset.i18nTitle)
-  for (const el of scope.querySelectorAll('[data-i18n-ph]')) el.placeholder = t(el.dataset.i18nPh)
+  for (const el of scope.querySelectorAll('[data-i18n-title]')) el.title = t(el.dataset.i18nTitle, v)
+  for (const el of scope.querySelectorAll('[data-i18n-ph]')) el.placeholder = t(el.dataset.i18nPh, v)
   document.documentElement.lang = I18N.getLang()
+}
+
+// 投入先の名前が出ている箇所をまとめて貼り直す。設定変更のたびに呼ぶ。
+// ⚠ サイドバー見出しだけ直して「ワークスペース外にいます」の注記を忘れると、
+//    そこだけ古いフォルダ名が残る（QA指摘）ので同じ関数の中で面倒を見る。
+function refreshInboxLabel() {
+  if (!CONFIG) return
+  $('#inbox-name').textContent = CONFIG.inboxName || '_inbox'
+  $('#inbox-header').title = CONFIG.inbox ? t('tip.inboxTarget', { inbox: CONFIG.inbox }) : ''
+  if (browseRoot) {
+    const away = !samePath(browseRoot, CONFIG.root)
+    $('#root-name').title = away
+      ? t('tip.awayRoot', { path: browseRoot, inbox: CONFIG.inbox })
+      : browseRoot
+  }
 }
 
 async function init() {
@@ -39,6 +59,7 @@ async function init() {
   I18N.setLang(CONFIG.lang)
   I18N.checkMissing((m) => console.warn(m)) // 腐り検知: 翻訳漏れは起動ログに出す
   applyI18n()
+  refreshInboxLabel()
   applyFonts()
   setupDrop()
   setupGlobal()
@@ -96,9 +117,8 @@ async function setBrowseRoot(dir, { record = false } = {}) {
   $('#path-input').value = dir
   $('#path-input').title = dir
   $('#root-name').textContent = baseName(dir)
-  $('#root-name').title = away ? t('tip.awayRoot', { path: dir, inbox: CONFIG.inbox }) : dir
   $('#root-name').classList.toggle('away', away)
-  $('#inbox-header').title = t('tip.inboxTarget', { inbox: CONFIG.inbox })
+  refreshInboxLabel() // #root-name の title もここで貼る
   openDirs.clear()
   await loadTreeRoot()
 }
@@ -193,6 +213,9 @@ function escapeHtml(s) {
 // ---------- ツリー ----------
 
 async function loadTreeRoot() {
+  // ワークスペース未設定のまま F5 や ⟳ を押すと readDir('') に落ちてエラー表示が出る。
+  // 呼び出し側ごとに guard を書くと必ず漏れるので、入口で止める（QA指摘）
+  if (!CONFIG || !CONFIG.rootOk) return
   const tree = $('#tree')
   tree.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
   const box = document.createElement('div')
@@ -586,7 +609,15 @@ function setupDrop() {
     if (internalDragPath) { internalDragPath = null; return }
     const paths = [...e.dataTransfer.files].map(f => api.pathForFile(f)).filter(Boolean)
     if (!paths.length) return
-    const results = await api.dropFiles(paths)
+    // 投入先が壊れている等で main 側が失敗すると invoke ごと reject する。
+    // 拾わないとドロップが完全に無反応になる（何も起きない＝一番分かりにくい壊れ方・QA指摘）
+    let results
+    try {
+      results = await api.dropFiles(paths)
+    } catch (err) {
+      addFeedEntry({ ok: false, name: baseName(paths[0]), error: String(err.message || err), ts: new Date().toISOString() })
+      return
+    }
     for (const r of results) addFeedEntry(r)
   })
 }
@@ -653,7 +684,13 @@ function toWslPath(p) {
 // ---------- グローバル ----------
 
 async function pasteToInbox() {
-  const results = await api.pasteClipboard()
+  let results
+  try {
+    results = await api.pasteClipboard()
+  } catch (err) {
+    addFeedEntry({ ok: false, name: '', error: String(err.message || err), ts: new Date().toISOString() })
+    return
+  }
   for (const r of results) addFeedEntry(r)
 }
 
@@ -766,6 +803,37 @@ function setupSettings() {
     if (await api.chooseRoot()) { await reloadRoot(); syncSettingsUI() }
   })
 
+  // ドロップ先フォルダ。弾かれたら赤く光らせて元の値に戻す（黙って無視しない）
+  const inboxInput = $('#set-inbox')
+  inboxInput.addEventListener('change', async () => {
+    // main 側が throw すると invoke ごと reject する。拾わないと
+    // 「赤くもならず何も出ないのに設定は変わっていない」になる（QA指摘）
+    let r
+    try {
+      r = await api.setInbox(inboxInput.value)
+    } catch (err) {
+      r = { ok: false, error: String(err.message || err) }
+    }
+    if (!r.ok) {
+      // 作れなかった理由（既存ファイルと同名など）は握り潰さず、そのまま見せる。
+      // 定型文だけ出すと「なぜ弾かれたか分からない」になる（QA指摘）
+      inboxInput.classList.add('bad')
+      inboxInput.title = r.error || t('err.inbox')
+      setTimeout(() => inboxInput.classList.remove('bad'), 1600)
+      inboxInput.value = CONFIG.inboxName
+      return
+    }
+    inboxInput.title = ''
+    CONFIG = await api.getConfig()
+    applyI18n()        // 「_inbox に入れる」等の案内文を新しい名前で作り直す
+    // ⚠ applyI18n は #preview-title も初期文言で塗り替える。開いているファイル名と
+    //    「● 入力中」の印が消えたまま戻らなくなるので、ここで貼り直す（QA指摘）
+    if (currentFile) updatePreviewTitle()
+    refreshInboxLabel()
+    syncSettingsUI()
+    if (CONFIG.rootOk) await loadTreeRoot() // 新しいフォルダを作った場合はツリーに出す
+  })
+
   $('#set-reset').addEventListener('click', () => {
     localStorage.removeItem('fontUi')
     localStorage.removeItem('fontMono')
@@ -780,6 +848,7 @@ function syncSettingsUI() {
   $('#set-lang').value = I18N.getLang()
   $('#set-root-path').textContent = CONFIG.root || t('notSet')
   $('#set-root-path').title = CONFIG.root || ''
+  $('#set-inbox').value = CONFIG.inboxName || ''
   const pct = Math.round(zoom * 100)
   $('#set-zoom').value = pct
   $('#zoom-val').textContent = pct + '%'

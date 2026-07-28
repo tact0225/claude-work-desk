@@ -104,6 +104,100 @@ ipcMain.handle('get-config', () => ({
   version: app.getVersion(),
 }))
 
+// ドロップ先フォルダ（既定 _inbox）はワークスペース内の相対パスに限定する。
+// 外を許すと「レーンを覗いていても投入先は動かない」という不変条件が意味を失うため、
+// 絶対パス・UNC・`..` での脱出を弾いてから resolve 後に再度 root 配下かを確かめる（2段構え）。
+// Windows が予約している装置名。mkdir が謎のエラーを返す前に弾く。
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+
+function sanitizeInbox(raw) {
+  let s = String(raw || '').trim().replace(/\\/g, '/')
+  if (!s) return null
+  // ⚠ UNC 判定は「先頭スラッシュを落とす前」に置く。
+  //    逆順だと //server/share が server/share に化けて素通りする（テストで検出）。
+  if (s.startsWith('//')) return null
+  s = s.replace(/^\/+|\/+$/g, '')
+  if (!s) return null
+  // ⚠ ドライブ判定は「落とした後」にも必要。/C:foo が C:foo として通り抜けるため（QA指摘）。
+  if (/^[a-zA-Z]:/.test(s)) return null
+
+  for (const seg of s.split('/')) {
+    if (!seg) return null
+    // Windows はパス解決時に末尾の空白・ピリオドを捨てる＝「.. 」は「..」、「CON 」は「CON」として効く。
+    // なので判定は必ず「捨てた後の姿」に対して行う（捨てる前に見ると末尾に空白を足すだけで抜けられる）。
+    const bare = seg.replace(/[ .]+$/, '')
+    if (bare === '') return null
+    if (RESERVED.test(bare)) return null
+  }
+  if (!config.root) return s // ワークスペース未設定なら文字列として保持するだけ
+
+  // 文字列演算だけでは symlink / ジャンクション経由の脱出を防げない（QA指摘・実証済み）。
+  // 1セグメントずつ降りて、途中に symlink があればその実体で判定し直す。
+  // ⚠ 「実在する最も近い祖先を realpath」方式では**壊れた symlink** を防げない
+  //    （リンク先が無い＝existsSync が false → 祖先まで遡って「中」と判定 → mkdir が外に実体を作る）。
+  let realRoot
+  try { realRoot = fs.realpathSync(config.root) } catch (e) { return null }
+  // ⚠ 区切りまで見ないと「..foo」という正当なフォルダ名を親への遡上と誤判定する（QA指摘）
+  const inside = (p) => {
+    const rel = path.relative(realRoot, p)
+    return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
+  }
+  let cur = realRoot
+  for (const seg of s.split('/')) {
+    cur = path.join(cur, seg)
+    let st
+    try { st = fs.lstatSync(cur) } catch (e) { break } // ここから先は未作成＝親まで安全なら可
+    if (st.isSymbolicLink()) {
+      let real
+      try { real = fs.realpathSync(cur) } catch (e) { return null } // 壊れたリンクは拒否
+      if (!inside(real)) return null
+      cur = real
+    }
+    if (!inside(cur)) return null
+  }
+  return s
+}
+
+// 使う直前に毎回確かめる版。設定時の検査だけでは、
+//   ①ワークスペース未設定のまま投入先を決める → 後からルートを選ぶ
+//   ②投入先を決めた後でワークスペースを変える
+// の順序で containment を素通りできる（QA指摘・実証済み）ため、書き込み経路は必ずこちらを通す。
+function inboxDirSafe() {
+  const s = config.root ? sanitizeInbox(config.inbox) : null
+  if (!s) {
+    const err = new Error(`unsafe inbox folder: ${config.inbox}`)
+    err.code = 'UNSAFE_INBOX'
+    throw err
+  }
+  return path.join(config.root, s)
+}
+
+// ⚠ 設定を確定するのは「フォルダを作れると確かめた後」。順序を逆にすると、
+//    既存ファイル名や予約名を打った瞬間に不正な投入先が保存され、UI は古い名前を出したまま
+//    ドロップが黙って全部失敗する状態が再起動後も残る（QA指摘・実証済み）。
+ipcMain.handle('set-inbox', async (_e, raw) => {
+  const s = sanitizeInbox(raw)
+  if (!s) return { ok: false, reason: 'invalid' }
+  if (config.root) {
+    const target = path.join(config.root, s)
+    try {
+      await fsp.mkdir(target, { recursive: true })
+      if (!(await fsp.stat(target)).isDirectory()) return { ok: false, reason: 'notdir' }
+    } catch (err) {
+      return { ok: false, reason: 'mkdir', error: err.message }
+    }
+  }
+  // ⚠ 保存も失敗しうる（ディスク・権限）。先に書いてから確定しないと、
+  //    「メモリ上は新しい投入先・ファイルには古い値・画面は古い名前」の三重ズレになる（QA指摘）
+  try {
+    saveUserConfig({ inbox: s })
+  } catch (err) {
+    return { ok: false, reason: 'save', error: err.message }
+  }
+  config.inbox = s
+  return { ok: true, inbox: s }
+})
+
 ipcMain.handle('set-lang', (_e, lang) => {
   config.lang = i18n.LANGS.includes(lang) ? lang : ''
   saveUserConfig({ lang: config.lang })
@@ -158,6 +252,12 @@ ipcMain.handle('choose-root', async () => {
   if (r.canceled || !r.filePaths[0]) return null
   config.root = r.filePaths[0]
   saveUserConfig({ root: config.root })
+  // 新しいワークスペースでは今の投入先が危険になっていることがある（同名の symlink がある等）。
+  // 危ないまま使わせず既定へ戻す。ワークスペース未設定のうちに投入先だけ決めた場合もここで効く。
+  if (!sanitizeInbox(config.inbox)) {
+    config.inbox = DEFAULTS.inbox
+    saveUserConfig({ inbox: config.inbox })
+  }
   return config.root
 })
 
@@ -230,12 +330,12 @@ ipcMain.handle('get-drop-log', async () => {
 async function copyIntoInbox(src) {
   const ts = new Date()
   const baseName = path.basename(src)
-  let dest = path.join(inboxDir(), baseName)
+  let dest = path.join(inboxDirSafe(), baseName)
   if (fs.existsSync(dest)) {
     const ext = path.extname(baseName)
     const stem = baseName.slice(0, baseName.length - ext.length)
     const stamp = ts.toISOString().replace(/[-:T]/g, '').slice(0, 14)
-    dest = path.join(inboxDir(), `${stem}_${stamp}${ext}`)
+    dest = path.join(inboxDirSafe(), `${stem}_${stamp}${ext}`)
   }
   const st = await fsp.stat(src)
   if (st.isDirectory()) await fsp.cp(src, dest, { recursive: true })
@@ -244,7 +344,7 @@ async function copyIntoInbox(src) {
 }
 
 ipcMain.handle('drop-files', async (_e, paths) => {
-  await fsp.mkdir(inboxDir(), { recursive: true })
+  await fsp.mkdir(inboxDirSafe(), { recursive: true })
   const results = []
   for (const src of paths) {
     try {
@@ -264,7 +364,7 @@ function clipStamp(d) {
 }
 
 ipcMain.handle('paste-clipboard', async () => {
-  await fsp.mkdir(inboxDir(), { recursive: true })
+  await fsp.mkdir(inboxDirSafe(), { recursive: true })
   const now = new Date()
   const results = []
 
@@ -284,14 +384,14 @@ ipcMain.handle('paste-clipboard', async () => {
     const img = clipboard.readImage()
     if (!img.isEmpty()) {
       // 2) 画像（スクリーンショット等）
-      const dest = path.join(inboxDir(), `clip_${clipStamp(now)}.png`)
+      const dest = path.join(inboxDirSafe(), `clip_${clipStamp(now)}.png`)
       await fsp.writeFile(dest, img.toPNG())
       results.push({ ok: true, name: path.basename(dest), path: dest, ts: now.toISOString() })
     } else {
       // 3) テキスト
       const text = clipboard.readText()
       if (text.trim()) {
-        const dest = path.join(inboxDir(), `clip_${clipStamp(now)}.md`)
+        const dest = path.join(inboxDirSafe(), `clip_${clipStamp(now)}.md`)
         await fsp.writeFile(dest, text)
         results.push({ ok: true, name: path.basename(dest), path: dest, ts: now.toISOString() })
       } else {
