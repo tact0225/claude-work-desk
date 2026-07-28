@@ -178,13 +178,19 @@ What changes:
 
 | | Obsidian | Here |
 | --- | --- | --- |
-| Where a link is looked up | the whole vault | the note's own folder, plus the folders listed in `wikilinkDirs` in `config.json` |
+| Where a link is looked up | the whole vault | the note's own folder, plus the folders listed in `wikilinkDirs` |
 | `[[note\|alias]]` | works | works |
 | `[[note#heading]]` | jumps to the heading | opens the note, but does not scroll to the heading |
 | `[[note^block]]` | works | **not supported** — renders grey |
 | `![[note]]` (embed) | embeds the note | **not embedded** — you get a link and a stray `!` |
 | `aliases:` in frontmatter | resolves | **not read** |
 | Exact spelling | forgiving | **exact match only** |
+
+`wikilinkDirs` ships as a generic starting point — the note's own folder plus `notes`,
+`docs`, and `wiki/…`. To point it at your own layout, edit
+**`%APPDATA%\claude-work-desk\user-config.json`**, *not* the `config.json` bundled with
+the app: `sync_to_windows.sh` overwrites that one on every update, and your change would
+vanish the next time you pull.
 
 That last row is the one that actually bites. A link written `[[my-note]]` when the file
 is `my_note.md` silently renders grey and nobody notices. When I moved my own workspace

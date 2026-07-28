@@ -16,7 +16,9 @@ const DEFAULTS = {
   fontMono: '',
   // [[ページ名]] を探すディレクトリ（root 相対・先頭から順に評価）。'' は root 直下。
   // 常に「そのmdと同じフォルダ」が最優先で、その後にこのリストを見る。
-  wikilinkDirs: ['', 'wiki', 'wiki/sources', 'wiki/concepts', 'memory', 'plans', 'skills'],
+  // ⚠ ここも config.json も「汎用の初期値」に留める。自分のフォルダ構成を焼き込むと
+  //    他人の環境で意味不明な既定になる。個人の追加は userData/user-config.json 側へ。
+  wikilinkDirs: ['', 'notes', 'docs', 'wiki', 'wiki/sources', 'wiki/concepts'],
 }
 let config = { ...DEFAULTS }
 
