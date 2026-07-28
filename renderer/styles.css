@@ -204,7 +204,12 @@ body.resizing #preview-body { pointer-events: none; }
   cursor: help; opacity: 0.75;
 }
 .md-body code { background: #2b3037; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); font-size: 12.5px; }
-.md-body pre { position: relative; background: #171a1f; border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow-x: auto; }
+/* コピー用コードブロックは横スクロールさせず折り返す（窓幅を変えても全文が見える） */
+.md-body pre {
+  position: relative; background: #171a1f; border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px 14px;
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden;
+}
 .copy-btn {
   position: absolute; top: 6px; right: 6px; opacity: 0;
   background: #2b313a; border: 1px solid var(--border); color: var(--muted);
