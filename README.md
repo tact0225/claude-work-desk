@@ -99,7 +99,8 @@ file never lands in the wrong lane.*
 
 *`Copy WSL path` gives you `/home/you/project/notes/release-checklist.md` — the form
 your terminal actually wants, instead of translating `\\wsl.localhost\...` by hand
-every time you point Claude Code at a file.*
+every time you point Claude Code at a file. Or skip the path entirely: drag the file
+straight out of the window into Explorer, a chat, or Google Drive.*
 
 ### Read-only until you say otherwise
 
@@ -165,6 +166,40 @@ Adding or fixing a language means editing one file, [`renderer/i18n.js`](rendere
 ```
 
 Missing translations fall back to English at runtime instead of rendering blank, and both processes log every missing `key [lang]` pair on startup — so a half-translated string is loud, not silent. Translation PRs are welcome (see Stance below on response times).
+
+## Coming from Obsidian
+
+This app resolves `[[wikilinks]]` so your notes stay navigable after you stop opening
+Obsidian. It is not a drop-in replacement, though, and some links **will go grey on the
+first run**. Grey means "not resolved" — nothing is deleted, so this is safe to discover
+gradually.
+
+What changes:
+
+| | Obsidian | Here |
+| --- | --- | --- |
+| Where a link is looked up | the whole vault | the note's own folder, plus the folders listed in `wikilinkDirs` in `config.json` |
+| `[[note\|alias]]` | works | works |
+| `[[note#heading]]` | jumps to the heading | opens the note, but does not scroll to the heading |
+| `[[note^block]]` | works | **not supported** — renders grey |
+| `![[note]]` (embed) | embeds the note | **not embedded** — you get a link and a stray `!` |
+| `aliases:` in frontmatter | resolves | **not read** |
+| Exact spelling | forgiving | **exact match only** |
+
+That last row is the one that actually bites. A link written `[[my-note]]` when the file
+is `my_note.md` silently renders grey and nobody notices. When I moved my own workspace
+over, **201 of 4,267 links were broken this way** — purely hyphen-versus-underscore.
+
+The fix is mechanical, so hand it to Claude Code: *"find every `[[link]]` in this
+workspace that doesn't resolve, and rewrite the ones where swapping hyphens for
+underscores finds a real file."* Point it at `wikilink.js` — the same `makeResolver()`
+this app uses will tell it exactly which links are dead. Worth re-running now and then;
+name-based links break quietly by design.
+
+⚠️ **If you use the Obsidian Web Clipper, keep Obsidian installed.** The clipper saves
+into an Obsidian vault and [needs the app](https://obsidian.md/help/web-clipper) — this
+app only reads folders, it cannot receive clips. Stopping Obsidian and keeping the
+clipper is not a combination that works.
 
 ## Known limitations
 
