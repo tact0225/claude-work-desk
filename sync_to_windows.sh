@@ -7,6 +7,11 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
+# 壊れたものを配らない。検査は動線に埋め込む＝手で思い出す運用にしない。
+echo "==> 自己検査"
+bash "$SRC/check.sh" || { echo "ERROR: check.sh が落ちました。配布を中止します"; exit 1; }
+echo
+
 WINUSER="${WINUSER:-}"
 if [ -z "$WINUSER" ]; then
   for d in /mnt/c/Users/*/; do

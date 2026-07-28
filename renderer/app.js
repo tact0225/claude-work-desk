@@ -598,10 +598,11 @@ function addFeedEntry(r) {
   const feed = $('#inbox-feed')
   const el = document.createElement('div')
   el.className = 'feed-entry fresh' + (r.ok ? '' : ' failed')
-  const t = new Date(r.ts)
-  const hh = String(t.getHours()).padStart(2, '0')
-  const mm = String(t.getMinutes()).padStart(2, '0')
-  const dateStr = `${t.getMonth() + 1}/${t.getDate()} ${hh}:${mm}`
+  // 変数名を t にしない: i18n の t() を関数スコープで隠してしまう（2026-07-28 実際に事故った）
+  const at = new Date(r.ts)
+  const hh = String(at.getHours()).padStart(2, '0')
+  const mm = String(at.getMinutes()).padStart(2, '0')
+  const dateStr = `${at.getMonth() + 1}/${at.getDate()} ${hh}:${mm}`
   el.innerHTML = `<span class="feed-time">${dateStr}</span><span class="feed-status">${r.ok ? '✓' : '✗'}</span><span class="feed-name">${escapeHtml(r.name)}</span>${r.ok ? '' : `<span class="feed-err">${escapeHtml(r.error || '')}</span>`}`
   if (r.ok && r.path) {
     el.title = t('tip.feedClick')
@@ -706,11 +707,11 @@ function setZoomTo(factor) {
   const pct = Math.round(zoom * 100)
   $('#set-zoom').value = pct
   $('#zoom-val').textContent = pct + '%'
-  const t = $('#zoom-toast')
-  t.textContent = pct + '%'
-  t.classList.add('show')
+  const toast = $('#zoom-toast')
+  toast.textContent = pct + '%'
+  toast.classList.add('show')
   clearTimeout(zoomToastTimer)
-  zoomToastTimer = setTimeout(() => t.classList.remove('show'), 900)
+  zoomToastTimer = setTimeout(() => toast.classList.remove('show'), 900)
 }
 
 // ---------- フォント設定（localStorage優先、config.jsonが下地） ----------
@@ -790,8 +791,8 @@ function syncSettingsUI() {
   }
 }
 
-function isTypingTarget(t) {
-  return !!t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)
+function isTypingTarget(el) {
+  return !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
 }
 
 function setupGlobal() {

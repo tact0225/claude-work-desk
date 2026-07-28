@@ -6,20 +6,88 @@
 
 If you run Claude Code (CLI) inside WSL, moving files between Windows and your workspace is a constant papercut: Explorer over `\\wsl.localhost\` is slow, Obsidian only shows Markdown, VS Code renders Markdown poorly. This app is a single window that fills that gap — it makes working with Claude Code feel like **tossing files into a chat**.
 
-## Features
+![The workspace tree on the left, a rendered Markdown note on the right, and the _inbox panel below the tree](docs/images/hero.png)
 
-- **Tree view** of your whole workspace (lazy-loaded, fast)
-- **Path bar** (top): paste a folder's full path and hit Enter to browse it — built for peeking into `git worktree` lanes (`~/claude-work-xxx`) with a single paste. WSL paths (`/home/...`, `/mnt/c/...`) work as-is and are converted to UNC automatically. `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that file.
-  - While you're outside the workspace the folder name turns blue with a `↗` marker. **The `_inbox/` drop target never moves** — drops always land in your real workspace, even while peeking at a lane.
-- **Preview**: rendered Markdown (toggle to source with line numbers, copy buttons on code blocks, draggable table column widths), syntax-highlighted code with line numbers, `.docx`, images, PDF
-- **Write mode**: the **Edit** button in the preview header turns the pane into an editor for Markdown/text files. Read-only is the default — pressing the button flips it into write mode and the button **inverts to solid blue**, so the writable state is unmistakable. `Ctrl+S` (or **Save**) saves; navigating away with unsaved changes prompts first (the title shows `● Editing`).
-  - **Undo/Redo (`↶` `↷`) appear only in write mode.** They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** (the editor element is never rebuilt on save). Undoing back to the saved content also clears the `●` marker.
-- **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` button / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links. Search directories are configured via `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they mark pages you haven't written yet.
-- **Inbox**: drop files anywhere on the window → copied into your workspace's `_inbox/`, with a chat-like receipt feed that fades after a minute. **Ctrl+V** pastes clipboard content (files / screenshots → .png / text → .md)
-- **Drag out**: drag any file from the tree straight into Explorer or a chat app
-- **Copy WSL path**: right-click → copy `/home/...`-style path, ready to paste into a Claude Code prompt
+*One window: your whole workspace as a tree, a real Markdown preview beside it, and
+an `_inbox/` that anything can be dropped into. Tables render, code blocks get a
+Copy button on hover, and `[[wikilinks]]` are clickable.*
+
+## What it does
+
+### Rendered to read, raw to fix
+
+![The same note shown as raw Markdown with line numbers running down the side](docs/images/markdown-source.png)
+
+*The same note as above, one click away. Rendered Markdown has no line 49 to point
+at — so when your coding agent tells you the problem is on line 49 of a note, flip
+to the source and go look at line 49.*
+
+### Code files, not just notes
+
+![A JavaScript file with syntax highlighting and line numbers](docs/images/code-view.png)
+
+*Source files get highlighting and line numbers too, so you can read what the agent
+just wrote without opening an editor.*
+
+### Drop anything, it lands in `_inbox/`
+
+![A file being dragged over the window, with a dashed drop zone reading Drop into _inbox](docs/images/drop-overlay.png)
+
+*Drag a file anywhere onto the window — there is no target to aim for, the whole
+window is the target. `Ctrl+V` works too: files, screenshots (saved as `.png`), or
+plain text (saved as `.md`).*
+
+### A receipt, not a guess
+
+![The inbox panel listing received files with timestamps and check marks](docs/images/inbox-feed.png)
+
+*Every arrival is logged with a time and a name, so you can see what landed without
+going to look. The list clears itself after a minute. Same-name files are kept, not
+overwritten — a timestamp is appended instead.*
+
+### Peek into another worktree lane without losing your inbox
+
+![The tree showing a different folder, its name in blue with an arrow marker](docs/images/worktree-lane.png)
+
+*Paste a path and the tree jumps there. WSL paths like `/home/you/project-lane` work
+as-is. The folder name turns blue with `↗` to remind you that you are outside your
+workspace — and `_inbox/` deliberately stays pointed at the real one, so a dropped
+file never lands in the wrong lane.*
+
+### Right-click, paste into your prompt
+
+![A context menu with Copy WSL path as the last item](docs/images/copy-wsl-path.png)
+
+*`Copy WSL path` gives you `/home/you/project/notes/release-checklist.md` — the form
+your terminal actually wants, instead of translating `\\wsl.localhost\...` by hand
+every time you point Claude Code at a file.*
+
+### Read-only until you say otherwise
+
+![The preview switched to an editor, with the Edit button inverted to solid blue](docs/images/write-mode.png)
+
+*The preview does not write to your files. Press **Edit** and the button inverts to
+solid blue, Undo/Redo and Save appear, and a `●` marks unsaved changes — the
+writable state is never something you have to guess at. Walking away with unsaved
+edits asks first.*
+
+### Eight languages, picked from your OS locale
+
+![The settings panel with the language dropdown open, listing eight languages](docs/images/languages.png)
+
+*English, 日本語, 简体中文, 한국어, Español, Português (BR), Deutsch, Français.
+The first launch follows your system locale and falls back to English. Adding or
+fixing one means editing a single file — see [Languages](#languages).*
+
+## Everything else
+
+- **Tree view** of your whole workspace, lazy-loaded so a large repo still opens instantly
+- **Path bar**: `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that one file
+- **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links; search directories come from `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they double as a list of pages you haven't written yet
+- **Undo/Redo** (`↶` `↷`) appear only in write mode. They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** — the editor element is never rebuilt on save
+- **Drag out**: drag any file from the tree straight into Explorer or a chat app (always a copy, never a move)
+- **More preview types**: `.docx`, images, PDF — plus draggable table column widths
 - **Display settings**: font size (Ctrl+wheel), UI/monospace font pickers, draggable sidebar width — all persisted
-- **8 UI languages**: English, 日本語, 简体中文, 한국어, Español, Português (BR), Deutsch, Français. Picked automatically from your OS locale on first launch; switch any time under ⚙ (see [Languages](#languages))
 
 ## Requirements
 
