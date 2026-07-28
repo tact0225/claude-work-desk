@@ -19,8 +19,26 @@ let editorEl = null
 
 init()
 
+// ---------- 多言語（i18n.js の辞書を画面に流し込む） ----------
+
+const t = (key, vars) => I18N.t(key, vars)
+
+// data-i18n=本文 / data-i18n-html=HTMLを含む本文 / data-i18n-title=ツールチップ / data-i18n-ph=プレースホルダ
+function applyI18n(scope = document) {
+  for (const el of scope.querySelectorAll('[data-i18n]')) {
+    if (el.dataset.i18nHtml !== undefined) el.innerHTML = t(el.dataset.i18n)
+    else el.textContent = t(el.dataset.i18n)
+  }
+  for (const el of scope.querySelectorAll('[data-i18n-title]')) el.title = t(el.dataset.i18nTitle)
+  for (const el of scope.querySelectorAll('[data-i18n-ph]')) el.placeholder = t(el.dataset.i18nPh)
+  document.documentElement.lang = I18N.getLang()
+}
+
 async function init() {
   CONFIG = await api.getConfig()
+  I18N.setLang(CONFIG.lang)
+  I18N.checkMissing((m) => console.warn(m)) // 腐り検知: 翻訳漏れは起動ログに出す
+  applyI18n()
   applyFonts()
   setupDrop()
   setupGlobal()
@@ -78,9 +96,9 @@ async function setBrowseRoot(dir, { record = false } = {}) {
   $('#path-input').value = dir
   $('#path-input').title = dir
   $('#root-name').textContent = baseName(dir)
-  $('#root-name').title = away ? `${dir}\n（_inbox の投入先は ${CONFIG.inbox} のまま）` : dir
+  $('#root-name').title = away ? t('tip.awayRoot', { path: dir, inbox: CONFIG.inbox }) : dir
   $('#root-name').classList.toggle('away', away)
-  $('#inbox-header').title = `投入先: ${CONFIG.inbox}`
+  $('#inbox-header').title = t('tip.inboxTarget', { inbox: CONFIG.inbox })
   openDirs.clear()
   await loadTreeRoot()
 }
@@ -117,7 +135,7 @@ function togglePathHist() {
   const list = pathHistory()
   box.innerHTML = ''
   if (!list.length) {
-    box.innerHTML = '<div class="hist-empty">履歴はまだありません</div>'
+    box.innerHTML = `<div class="hist-empty">${escapeHtml(t('hist.empty'))}</div>`
   } else {
     for (const p of list) {
       const it = document.createElement('div')
@@ -129,7 +147,7 @@ function togglePathHist() {
     }
     const clear = document.createElement('div')
     clear.className = 'hist-clear'
-    clear.textContent = '履歴を消す'
+    clear.textContent = t('hist.clear')
     clear.addEventListener('click', () => { localStorage.removeItem('pathHistory'); hidePathHist() })
     box.appendChild(clear)
   }
@@ -157,11 +175,10 @@ function showRootPicker() {
   const isUnset = !CONFIG.root
   $('#preview-body').innerHTML = `
     <div class="welcome ${isUnset ? '' : 'error'}">
-      <h2>${isUnset ? 'ようこそ。まずワークスペースフォルダを選んでください' : 'ワークスペースにアクセスできません'}</h2>
-      ${isUnset ? '' : `<p>パス: <code>${escapeHtml(CONFIG.root)}</code>（WSL停止中や名前変更の可能性）</p>`}
-      <p>Claude Code で使っているフォルダを指定します。WSL内のフォルダは<br>
-      ダイアログ左側の「Linux」から辿るか、パス欄に <code>\\\\wsl.localhost\\...</code> を貼り付けてください。</p>
-      <p><button id="btn-choose-root" class="big-btn">📁 フォルダを選ぶ…</button></p>
+      <h2>${escapeHtml(isUnset ? t('root.welcome') : t('root.unreachable'))}</h2>
+      ${isUnset ? '' : `<p>${t('root.pathNote', { path: escapeHtml(CONFIG.root) })}</p>`}
+      <p>${t('root.hint')}</p>
+      <p><button id="btn-choose-root" class="big-btn">${escapeHtml(t('root.choose'))}</button></p>
     </div>`
   $('#tree').innerHTML = ''
   $('#btn-choose-root').addEventListener('click', async () => {
@@ -177,7 +194,7 @@ function escapeHtml(s) {
 
 async function loadTreeRoot() {
   const tree = $('#tree')
-  tree.innerHTML = '<div class="loading">読み込み中…</div>'
+  tree.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
   const box = document.createElement('div')
   await loadChildren(browseRoot || CONFIG.root, box, 0)
   tree.innerHTML = ''
@@ -187,7 +204,7 @@ async function loadTreeRoot() {
 async function loadChildren(dirPath, container, depth) {
   let entries
   try { entries = await api.readDir(dirPath) } catch (e) {
-    container.innerHTML = `<div class="loading">読めません: ${escapeHtml(e.message)}</div>`
+    container.innerHTML = `<div class="loading">${escapeHtml(t('err.read', { msg: e.message }))}</div>`
     return
   }
   container.innerHTML = ''
@@ -274,10 +291,10 @@ function fileIcon(name) {
 async function openPreview(p) {
   if (!await leaveEditMode()) return false
   const body = $('#preview-body')
-  body.innerHTML = '<div class="loading">読み込み中…</div>'
+  body.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
   let res
   try { res = await api.readFile(p) } catch (e) {
-    body.innerHTML = `<div class="welcome error"><p>読めません: ${escapeHtml(e.message)}</p></div>`
+    body.innerHTML = `<div class="welcome error"><p>${escapeHtml(t('err.read', { msg: e.message }))}</p></div>`
     return false
   }
   currentFile = res
@@ -297,42 +314,42 @@ function renderPreview(res) {
   if (navHistory.length && !editMode) {
     const btnBack = document.createElement('button')
     btnBack.textContent = '←'
-    btnBack.title = '直前のノートに戻る (Alt+←)'
+    btnBack.title = t('tip.back')
     btnBack.onclick = goBack
     actions.appendChild(btnBack)
   }
   if (res.kind === 'markdown' && !editMode) {
     const btn = document.createElement('button')
-    btn.textContent = mdMode === 'rendered' ? 'ソース表示' : 'プレビュー表示'
+    btn.textContent = mdMode === 'rendered' ? t('btn.source') : t('btn.rendered')
     btn.onclick = () => { mdMode = mdMode === 'rendered' ? 'source' : 'rendered'; renderPreview(res) }
     actions.appendChild(btn)
   }
   if (isEditable(res)) {
     if (editMode) {
       // Undo/Redo は入力モードの時だけ出す（読むだけの時は不要なので置かない）
-      const btnUndo = editToolButton('↶', '元に戻す (Ctrl+Z)', () => runEditCmd('undo'))
-      const btnRedo = editToolButton('↷', 'やり直す (Ctrl+Shift+Z / Ctrl+Y)', () => runEditCmd('redo'))
+      const btnUndo = editToolButton('↶', t('tip.undo'), () => runEditCmd('undo'))
+      const btnRedo = editToolButton('↷', t('tip.redo'), () => runEditCmd('redo'))
       btnUndo.classList.add('icon-btn')
       btnRedo.classList.add('icon-btn')
       actions.append(btnUndo, btnRedo)
-      const btnSave = editToolButton('保存', 'このファイルに書き込む (Ctrl+S)', saveEdit)
+      const btnSave = editToolButton(t('btn.save'), t('tip.save'), saveEdit)
       btnSave.id = 'btn-save'
       actions.appendChild(btnSave)
     }
     const btnEdit = document.createElement('button')
-    btnEdit.textContent = '入力'
+    btnEdit.textContent = t('btn.edit')
     if (editMode) btnEdit.classList.add('toggled')
-    btnEdit.title = editMode ? '入力モードを抜けてプレビューに戻る' : '書き込みモードにする（既定は読むだけ）'
+    btnEdit.title = editMode ? t('tip.editOff') : t('tip.editOn')
     btnEdit.onclick = toggleEdit
     actions.appendChild(btnEdit)
   }
   const btnExp = document.createElement('button')
   btnExp.textContent = 'Explorer'
-  btnExp.title = 'Explorerで表示'
+  btnExp.title = t('tip.explorer')
   btnExp.onclick = () => api.showInFolder(res.path)
   const btnOpen = document.createElement('button')
-  btnOpen.textContent = '開く'
-  btnOpen.title = '既定のアプリで開く'
+  btnOpen.textContent = t('btn.open')
+  btnOpen.title = t('tip.open')
   btnOpen.onclick = () => api.openPath(res.path)
   actions.append(btnExp, btnOpen)
 
@@ -358,13 +375,13 @@ function renderPreview(res) {
       body.innerHTML = `<iframe class="pdfframe" src="${res.url}"></iframe>`
       break
     case 'toolarge':
-      body.innerHTML = `<div class="welcome"><p>4MB超のためプレビュー省略。「開く」で既定アプリへ。</p></div>`
+      body.innerHTML = `<div class="welcome"><p>${escapeHtml(t('preview.toolarge'))}</p></div>`
       break
     case 'binary':
-      body.innerHTML = `<div class="welcome"><p>プレビュー非対応の形式です。「開く」で既定アプリへ。</p></div>`
+      body.innerHTML = `<div class="welcome"><p>${escapeHtml(t('preview.unsupported'))}</p></div>`
       break
     default:
-      body.innerHTML = `<div class="welcome error"><p>${escapeHtml(res.message || '表示できません')}</p></div>`
+      body.innerHTML = `<div class="welcome error"><p>${escapeHtml(res.message || t('preview.cannotShow'))}</p></div>`
   }
 }
 
@@ -401,7 +418,7 @@ function refreshDirty() {
 function updatePreviewTitle(res) {
   const f = res || currentFile
   if (!f) return
-  const mark = editMode ? (editDirty ? '● 入力中 ' : '入力中 ') : ''
+  const mark = editMode ? (editDirty ? t('title.editingDirty') : t('title.editing')) : ''
   $('#preview-title').textContent = `${mark}${f.name}  (${fmtSize(f.size)})`
   $('#preview-title').classList.toggle('editing', editMode)
 }
@@ -441,7 +458,7 @@ function toggleEdit() {
 // 破棄した時はディスクの内容を読み直す＝画面に編集途中の文字が残らない。
 async function leaveEditMode() {
   if (!editMode) return true
-  if (editDirty && !confirm('保存していない変更があります。破棄して進みますか？')) return false
+  if (editDirty && !confirm(t('confirm.discard'))) return false
   const wasDirty = editDirty
   editMode = false
   editDirty = false
@@ -456,7 +473,7 @@ async function saveEdit() {
   if (!editMode || !editorEl || !currentFile) return
   const content = editorEl.value
   const r = await api.writeFile(currentFile.path, content)
-  if (!r.ok) { alert('保存に失敗: ' + r.error); return }
+  if (!r.ok) { alert(t('err.save', { msg: r.error })); return }
   // 保存後に読み直す＝プレビューへ戻した時に古い内容が出ない（html/行数も更新される）。
   // ただし textarea は作り直さない＝保存を挟んでも Undo 履歴とカーソル位置が切れない。
   // 読み直せなかった時も source は書いた内容に更新する（でないと ● が消えず未保存に見える）
@@ -466,9 +483,9 @@ async function saveEdit() {
   updatePreviewTitle()
   const btn = $('#btn-save')
   if (btn) {
-    btn.textContent = '✓ 保存した'
+    btn.textContent = t('btn.saved')
     btn.classList.add('saved')
-    setTimeout(() => { if ($('#btn-save') === btn) { btn.textContent = '保存'; btn.classList.remove('saved') } }, 1600)
+    setTimeout(() => { if ($('#btn-save') === btn) { btn.textContent = t('btn.save'); btn.classList.remove('saved') } }, 1600)
   }
 }
 
@@ -478,12 +495,12 @@ function addCopyButtons(scope) {
     const text = pre.textContent
     const btn = document.createElement('button')
     btn.className = 'copy-btn'
-    btn.textContent = 'コピー'
+    btn.textContent = t('btn.copy')
     btn.addEventListener('click', async (e) => {
       e.stopPropagation()
       await navigator.clipboard.writeText(text)
-      btn.textContent = '✓ コピーした'
-      setTimeout(() => { btn.textContent = 'コピー' }, 1500)
+      btn.textContent = t('btn.copied')
+      setTimeout(() => { btn.textContent = t('btn.copy') }, 1500)
     })
     pre.appendChild(btn)
   }
@@ -507,7 +524,7 @@ function enhanceTables(scope) {
     headCells.forEach((th, i) => {
       const grip = document.createElement('div')
       grip.className = 'col-grip'
-      grip.title = 'ドラッグで列幅調整'
+      grip.title = t('tip.colGrip')
       th.style.position = 'relative'
       th.appendChild(grip)
       grip.addEventListener('mousedown', (e) => {
@@ -587,7 +604,7 @@ function addFeedEntry(r) {
   const dateStr = `${t.getMonth() + 1}/${t.getDate()} ${hh}:${mm}`
   el.innerHTML = `<span class="feed-time">${dateStr}</span><span class="feed-status">${r.ok ? '✓' : '✗'}</span><span class="feed-name">${escapeHtml(r.name)}</span>${r.ok ? '' : `<span class="feed-err">${escapeHtml(r.error || '')}</span>`}`
   if (r.ok && r.path) {
-    el.title = 'クリックでプレビュー'
+    el.title = t('tip.feedClick')
     el.addEventListener('click', () => openPreview(r.path))
   }
   feed.prepend(el)
@@ -601,10 +618,10 @@ function addFeedEntry(r) {
 
 function showCtxMenu(e, en) {
   showMenu(e, [
-    ['既定のアプリで開く', () => api.openPath(en.path)],
-    ['Explorerで表示', () => api.showInFolder(en.path)],
-    ['Windowsパスをコピー', () => navigator.clipboard.writeText(en.path)],
-    ['WSLパスをコピー', () => navigator.clipboard.writeText(toWslPath(en.path))],
+    [t('ctx.open'), () => api.openPath(en.path)],
+    [t('ctx.explorer'), () => api.showInFolder(en.path)],
+    [t('ctx.copyWin'), () => navigator.clipboard.writeText(en.path)],
+    [t('ctx.copyWsl'), () => navigator.clipboard.writeText(toWslPath(en.path))],
   ])
 }
 
@@ -716,6 +733,22 @@ function setupSettings() {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('show') })
   $('#set-zoom').addEventListener('input', (e) => setZoomTo(e.target.value / 100))
 
+  // 言語切替。選択肢の表示名は常にその言語自身の表記（読めない言語で迷子にならないため）
+  const langSel = $('#set-lang')
+  for (const lang of I18N.LANGS) {
+    const o = document.createElement('option')
+    o.value = lang
+    o.textContent = I18N.LANG_NAMES[lang]
+    langSel.appendChild(o)
+  }
+  // 切り替えたら読み込み直す＝画面に出ている文言を1つ残らず確実に入れ替える。
+  // 未保存の入力があれば leaveEditMode が確認するので、書きかけは失われない。
+  langSel.addEventListener('change', async () => {
+    if (!await leaveEditMode()) { langSel.value = I18N.getLang(); return }
+    await api.setLang(langSel.value)
+    location.reload()
+  })
+
   const onFontChange = () => {
     const ui = $('#set-font-ui-custom').value.trim() || $('#set-font-ui').value
     const mono = $('#set-font-mono-custom').value.trim() || $('#set-font-mono').value
@@ -743,7 +776,8 @@ function setupSettings() {
 
 function syncSettingsUI() {
   $('#set-version').textContent = CONFIG.version ? `v${CONFIG.version}` : ''
-  $('#set-root-path').textContent = CONFIG.root || '(未設定)'
+  $('#set-lang').value = I18N.getLang()
+  $('#set-root-path').textContent = CONFIG.root || t('notSet')
   $('#set-root-path').title = CONFIG.root || ''
   const pct = Math.round(zoom * 100)
   $('#set-zoom').value = pct
@@ -771,7 +805,7 @@ function setupGlobal() {
   $('#preview-body').addEventListener('contextmenu', (e) => {
     const sel = window.getSelection().toString()
     if (!sel) return
-    showMenu(e, [['選択をコピー', () => navigator.clipboard.writeText(sel)]])
+    showMenu(e, [[t('ctx.copySelection'), () => navigator.clipboard.writeText(sel)]])
   })
   // [[ページ名]] のクリックで対象ノートへ飛ぶ（解決済みのものだけ data-wiki を持つ）
   $('#preview-body').addEventListener('click', (e) => {

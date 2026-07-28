@@ -1,44 +1,35 @@
 # claude-work Desk
 
-[English README](README.en.md)
+[日本語README](README.ja.md)
 
-**WSL上のClaude Codeワークスペースと、Windowsデスクトップの「受け渡し窓」。**
+**A file-handoff desk between your WSL-based Claude Code workspace and the Windows desktop.**
 
-Claude Code（CLI）をWSLで使っていると、Windows側とのファイルのやりとりが地味に面倒です。
-Explorerで`\\wsl.localhost\...`を開くのは重いし、Obsidianはmdしか見えないし、VS Codeはmdが読みづらい。
+If you run Claude Code (CLI) inside WSL, moving files between Windows and your workspace is a constant papercut: Explorer over `\\wsl.localhost\` is slow, Obsidian only shows Markdown, VS Code renders Markdown poorly. This app is a single window that fills that gap — it makes working with Claude Code feel like **tossing files into a chat**.
 
-このアプリは、その隙間を埋める1枚のウィンドウです。**Claude Codeとの共同作業を「チャットにファイルを投げる感覚」にする**ために作りました。
+## Features
 
-## できること
+- **Tree view** of your whole workspace (lazy-loaded, fast)
+- **Path bar** (top): paste a folder's full path and hit Enter to browse it — built for peeking into `git worktree` lanes (`~/claude-work-xxx`) with a single paste. WSL paths (`/home/...`, `/mnt/c/...`) work as-is and are converted to UNC automatically. `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that file.
+  - While you're outside the workspace the folder name turns blue with a `↗` marker. **The `_inbox/` drop target never moves** — drops always land in your real workspace, even while peeking at a lane.
+- **Preview**: rendered Markdown (toggle to source with line numbers, copy buttons on code blocks, draggable table column widths), syntax-highlighted code with line numbers, `.docx`, images, PDF
+- **Write mode**: the **Edit** button in the preview header turns the pane into an editor for Markdown/text files. Read-only is the default — pressing the button flips it into write mode and the button **inverts to solid blue**, so the writable state is unmistakable. `Ctrl+S` (or **Save**) saves; navigating away with unsaved changes prompts first (the title shows `● Editing`).
+  - **Undo/Redo (`↶` `↷`) appear only in write mode.** They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** (the editor element is never rebuilt on save). Undoing back to the saved content also clears the `●` marker.
+- **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` button / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links. Search directories are configured via `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they mark pages you haven't written yet.
+- **Inbox**: drop files anywhere on the window → copied into your workspace's `_inbox/`, with a chat-like receipt feed that fades after a minute. **Ctrl+V** pastes clipboard content (files / screenshots → .png / text → .md)
+- **Drag out**: drag any file from the tree straight into Explorer or a chat app
+- **Copy WSL path**: right-click → copy `/home/...`-style path, ready to paste into a Claude Code prompt
+- **Display settings**: font size (Ctrl+wheel), UI/monospace font pickers, draggable sidebar width — all persisted
+- **8 UI languages**: English, 日本語, 简体中文, 한국어, Español, Português (BR), Deutsch, Français. Picked automatically from your OS locale on first launch; switch any time under ⚙ (see [Languages](#languages))
 
-- **ツリー表示**: ワークスペース全体をエクスプローラ風に閲覧（遅延読み込みで軽い）
-- **パス欄（最上段）**: フォルダのフルパスを貼って Enter → そこをツリーに表示。`git worktree`で切ったレーン（`~/claude-work-xxx`）をパスひとつで覗くのが主用途。Claude Codeが吐く**WSLパス（`/home/...`・`/mnt/c/...`）をそのまま貼れる**（UNCパスへ自動変換）。右の`▾`でエクスプローラ風の履歴（直近20件）、`⌂`でワークスペースへ復帰、`↑`で1つ上へ。ファイルのパスを貼った時は親フォルダを開いてその1枚をプレビュー。
-  - ワークスペースの外を見ている間はフォルダ名が`↗`付きの青字になる。**このとき`_inbox/`の投入先は動かない**（レーンを覗いていてもドロップは常に本体のワークスペースへ）
-- **プレビュー**:
-  - Markdown → レンダリング表示（ワンタッチでソース＋行番号に切替、コードブロックにコピーボタン、表の列幅ドラッグ調整）
-  - **Wikilink `[[ページ名]]`** → クリックで対象ノートへジャンプ（`←`ボタン / Alt+← で戻る）。パスでなく**名前**で引くので、ファイルを移動してもリンクは切れない。探索先は`config.json`の`wikilinkDirs`で指定。解決できないリンクは消さずグレー表示＝「まだ書いてないページ」の印として残す
-  - コード/テキスト → シンタックスハイライト＋行番号
-  - `.docx` / 画像 / PDF → そのまま表示
-- **入力モード（書き込み）**: プレビュー右上の**入力**ボタンで、md/テキストをその場で編集して保存できる。既定は読むだけ＝押した時だけ書き込みモードになり、ボタンが**青く反転**して「今は書き込める状態」がひと目で分かる。`Ctrl+S`または`保存`で書き込み、未保存のまま他のファイルへ移ろうとすると確認が出る（`● 入力中`がタイトルに出る）
-  - **Undo/Redo（`↶` `↷`）は入力モードの時だけ現れる**。自前の履歴を持たずChromiumの編集履歴を直接叩くので、ボタンと`Ctrl+Z`/`Ctrl+Shift+Z`が同じ1本の履歴を共有し、日本語IMEの変換も1操作として戻せる。**保存を挟んでも履歴は切れない**（保存時に編集欄を作り直さない設計）。Undoで保存済みの内容まで戻すと`●`も消える
-- **インボックス（ここが本体）**:
-  - ウィンドウのどこでもファイルを**ドロップ** → ワークスペースの`_inbox/`にコピー、受領履歴がチャット風に流れて1分で消える
-  - **Ctrl+V** → クリップボードの中身を`_inbox/`へ（Explorerでコピーしたファイル／スクショ→.png／テキスト→.md を自動判別）
-- **取り出し**: ツリーのファイルを**ウィンドウ外へドラッグ** → Explorerやチャットアプリにそのまま出せる
-- **WSLパスコピー**: 右クリック → `/home/...`形式のパスをコピー → Claude Codeのプロンプトにそのまま貼れる
-- **表示設定**: ⚙から文字サイズ（Ctrl+ホイールでも）・フォント（UI/等幅）を変更、サイドバー幅もドラッグ調整。すべて記憶
-
-「`_inbox/`にファイルを放り込む → Claude Codeが処理する」という運用スタイルとセットで真価を出しますが、単なるWSLファイルビューアとしても使えます。
-
-## 必要なもの
+## Requirements
 
 - Windows 10/11 + WSL2
-- Windows側のNode.js（LTS）— https://nodejs.org
-- WSL側のrsync（大抵入っています）
+- Node.js LTS on the Windows side — https://nodejs.org
+- rsync inside WSL (usually preinstalled)
 
-## セットアップ
+## Setup
 
-WSLのターミナルで:
+From a WSL terminal:
 
 ```bash
 git clone https://github.com/tact0225/claude-work-desk.git
@@ -46,25 +37,41 @@ cd claude-work-desk
 bash sync_to_windows.sh
 ```
 
-これで`%LOCALAPPDATA%\claude-work-desk`への配布・依存インストール・デスクトップショートカット作成まで終わります。
-初回起動時にワークスペースフォルダを選んでください（ダイアログ左の「Linux」からWSL内を辿れます）。
+This deploys to `%LOCALAPPDATA%\claude-work-desk`, installs dependencies, and creates a desktop shortcut. On first launch, pick your workspace folder (WSL folders are under "Linux" in the dialog sidebar).
 
-アップデートは`git pull`して`bash sync_to_windows.sh`を再実行するだけ。設定（フォルダ・フォント等）は保持されます。
+To update: `git pull` then re-run `bash sync_to_windows.sh`. Your settings survive redeployment.
 
-## 既知の制約
+## Languages
 
-- **Windowsネイティブで動かす前提**です（WSLg上ではExplorerからのD&Dが効かないため）
-- WSL側のファイル変更は自動では画面に反映されません（9Pプロトコルに変更通知がない）。F5か⟳で更新してください
-- ツリーからのドラッグ取り出しは常に**コピー**（移動ではない）
-- 入力モードは素のテキストエリア（編集中のハイライト・補完・差分表示はない）。Undo/Redoはブラウザの編集履歴なので、**入力モードを抜ける／他のファイルへ移ると履歴はリセット**される。**その場の一言直し**用で、長文執筆やコード編集はエディタ側でどうぞ。保存は上書き＝バックアップは取らないので、gitで管理しているフォルダで使うのが前提
-- `.xlsx` / `.pptx` / 旧`.doc`はプレビュー非対応（ダブルクリックで既定アプリへ）
+The UI ships in 8 languages: **English, 日本語, 简体中文, 한국어, Español, Português (BR), Deutsch, Français**.
 
-## スタンス
+On first launch the language is taken from your OS locale, falling back to English for anything unsupported. Change it under **⚙ → Language**; the choice is saved and the window reloads to apply it. Traditional Chinese locales (`zh-TW` / `zh-HK`) currently map to Simplified Chinese.
 
-作者が自分の毎日の道具として使うために作ったものを、そのまま公開しています。
-**as-is・サポートなし**が基本です。Issue/PRは歓迎しますが、返信や取り込みは約束しません。
+Adding or fixing a language means editing one file, [`renderer/i18n.js`](renderer/i18n.js), which is laid out key-first so every language for a given string sits in one block:
 
-ほぼ全コードはClaude Code（Anthropic）との共同作業で書かれています。本プロジェクトはAnthropic非公式です。
+```js
+'btn.save': {
+  ja: '保存', en: 'Save', zh: '保存', ko: '저장',
+  es: 'Guardar', pt: 'Salvar', de: 'Speichern', fr: 'Enregistrer',
+},
+```
+
+Missing translations fall back to English at runtime instead of rendering blank, and both processes log every missing `key [lang]` pair on startup — so a half-translated string is loud, not silent. Translation PRs are welcome (see Stance below on response times).
+
+## Known limitations
+
+- Must run as a native Windows app (drag & drop from Explorer doesn't reach WSLg windows)
+- File changes inside WSL are not auto-detected (the 9P protocol has no change notification) — refresh with F5
+- Dragging out of the tree always **copies** (never moves)
+- Source comments are written in Japanese (the UI itself is fully translated)
+- Write mode is a plain textarea (no highlighting, completion, or diff while editing). Undo/Redo ride the browser's edit history, so **leaving write mode or switching files resets it**. It's meant for **quick one-line fixes**, not long-form writing or code editing. Saving overwrites in place with no backup, so use it on folders under version control
+- No preview for `.xlsx` / `.pptx` / legacy `.doc` (double-click opens the default app)
+
+## Stance
+
+This is the author's daily-driver tool, published as-is. **No support promised.** Issues and PRs are welcome but replies and merges are not guaranteed.
+
+Almost all code was written in collaboration with Claude Code (Anthropic). This project is not affiliated with Anthropic.
 
 ## License
 

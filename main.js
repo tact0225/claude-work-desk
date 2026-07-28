@@ -3,10 +3,14 @@ const path = require('path')
 const fs = require('fs')
 const fsp = fs.promises
 const { pathToFileURL } = require('url')
+const i18n = require('./renderer/i18n')
+const t = (key, vars) => i18n.t(key, vars)
 
 const DEFAULTS = {
   root: '',
   inbox: '_inbox',
+  // '' = OSのロケールに合わせる。設定パネルで選ぶと user-config.json に固定される
+  lang: '',
   hidden: ['.git', 'node_modules', '__pycache__', '.obsidian', '.venv', 'venv', '.claude'],
   fontUi: '',
   fontMono: '',
@@ -31,6 +35,11 @@ function saveUserConfig(patch) {
   try { uc = JSON.parse(fs.readFileSync(userConfigPath(), 'utf8')) } catch (e) { /* 初回 */ }
   Object.assign(uc, patch)
   fs.writeFileSync(userConfigPath(), JSON.stringify(uc, null, 2))
+}
+
+// 明示設定があればそれ、無ければ OS のロケールから。どちらも対応外なら英語。
+function applyLang() {
+  return i18n.setLang(config.lang || i18n.detect(app.getLocale()))
 }
 
 const rootDir = () => config.root
@@ -85,7 +94,8 @@ function resolveMdImages(html, mdDir) {
 ipcMain.handle('get-config', () => ({
   root: rootDir(),
   rootOk: !!rootDir() && fs.existsSync(rootDir()),
-  rootName: rootDir() ? path.basename(rootDir()) : '(未設定)',
+  rootName: rootDir() ? path.basename(rootDir()) : '',
+  lang: i18n.getLang(),
   inbox: rootDir() ? inboxDir() : '',
   inboxName: config.inbox,
   hidden: config.hidden,
@@ -93,6 +103,12 @@ ipcMain.handle('get-config', () => ({
   fontMono: config.fontMono || '',
   version: app.getVersion(),
 }))
+
+ipcMain.handle('set-lang', (_e, lang) => {
+  config.lang = i18n.LANGS.includes(lang) ? lang : ''
+  saveUserConfig({ lang: config.lang })
+  return applyLang()
+})
 
 // ---------- パス欄（アドレスバー）----------
 
@@ -123,19 +139,19 @@ function normalizeInputPath(input) {
 // フォルダなら「そこを表示」、ファイルなら「親を表示してその1枚をプレビュー」
 ipcMain.handle('resolve-target', async (_e, input) => {
   const p = normalizeInputPath(input)
-  if (!p) return { ok: false, error: 'パスが空です' }
+  if (!p) return { ok: false, error: t('main.emptyPath') }
   try {
     const st = await fsp.stat(p)
     if (st.isDirectory()) return { ok: true, path: p, isDir: true, filePath: null }
     return { ok: true, path: path.dirname(p), isDir: false, filePath: p }
   } catch (e) {
-    return { ok: false, path: p, error: `開けません: ${p}` }
+    return { ok: false, path: p, error: t('main.cannotOpen', { path: p }) }
   }
 })
 
 ipcMain.handle('choose-root', async () => {
   const r = await dialog.showOpenDialog({
-    title: 'ワークスペースフォルダを選択（WSL内は「Linux」から辿れます）',
+    title: t('main.chooseTitle'),
     properties: ['openDirectory'],
     defaultPath: rootDir() || undefined,
   })
@@ -152,7 +168,7 @@ ipcMain.handle('read-dir', async (_e, dirPath) => {
     isDir: en.isDirectory(),
     path: path.join(dirPath, en.name),
   }))
-  out.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name, 'ja'))
+  out.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name, i18n.getLang()))
   return out
 })
 
@@ -168,7 +184,7 @@ ipcMain.handle('read-file', async (_e, filePath) => {
       const mammoth = require('mammoth')
       const result = await mammoth.convertToHtml({ path: filePath })
       return { ...base, kind: 'docx', html: result.value }
-    } catch (err) { return { ...base, kind: 'error', message: 'docx変換に失敗: ' + err.message } }
+    } catch (err) { return { ...base, kind: 'error', message: t('main.docxFail', { msg: err.message }) } }
   }
   if (['.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.zip', '.exe'].includes(ext)) return { ...base, kind: 'binary' }
   if (stat.size > 4 * 1024 * 1024) return { ...base, kind: 'toolarge' }
@@ -279,7 +295,7 @@ ipcMain.handle('paste-clipboard', async () => {
         await fsp.writeFile(dest, text)
         results.push({ ok: true, name: path.basename(dest), path: dest, ts: now.toISOString() })
       } else {
-        results.push({ ok: false, name: '(クリップボードが空)', error: 'ファイル/画像/テキストなし', ts: now.toISOString() })
+        results.push({ ok: false, name: t('main.clipEmptyName'), error: t('main.clipEmptyErr'), ts: now.toISOString() })
       }
     }
   }
@@ -305,7 +321,7 @@ function createWindow() {
     height: 920,
     backgroundColor: '#1e2227',
     autoHideMenuBar: true,
-    title: 'claude-work デスク',
+    title: 'claude-work Desk',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
@@ -313,6 +329,8 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadConfig()
+  applyLang()
+  i18n.checkMissing((m) => console.warn(m)) // 腐り検知: 翻訳漏れは起動ログに出す
   createWindow()
 })
 app.on('window-all-closed', () => app.quit())

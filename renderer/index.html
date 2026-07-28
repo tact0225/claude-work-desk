@@ -1,99 +1,101 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>claude-work デスク</title>
+<title>claude-work Desk</title>
 <link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div id="shell">
 <div id="pathbar">
-  <button id="btn-home" title="ワークスペースのルートに戻る">⌂</button>
-  <button id="btn-up" title="1つ上のフォルダへ">↑</button>
+  <button id="btn-home" data-i18n-title="tip.home">⌂</button>
+  <button id="btn-up" data-i18n-title="tip.up">↑</button>
   <div id="path-input-wrap">
-    <input type="text" id="path-input" spellcheck="false" autocomplete="off"
-           placeholder="表示したいフォルダのフルパスを貼って Enter（WSLパス /home/... もそのままOK）">
-    <button id="btn-path-hist" title="履歴（Windowsのアドレスバー風）">▾</button>
+    <input type="text" id="path-input" spellcheck="false" autocomplete="off" data-i18n-ph="ph.path">
+    <button id="btn-path-hist" data-i18n-title="tip.history">▾</button>
     <div id="path-hist"></div>
   </div>
-  <button id="btn-path-go" title="ここを表示（Enter）">表示</button>
+  <button id="btn-path-go" data-i18n="btn.go" data-i18n-title="tip.go">Go</button>
 </div>
 <div id="app">
   <aside id="sidebar">
     <div id="sidebar-header">
       <span id="root-name">claude-work</span>
       <span>
-        <button id="btn-settings" title="設定（文字サイズ・フォント）">⚙</button>
-        <button id="btn-refresh" title="ツリー更新 (F5)">⟳</button>
+        <button id="btn-settings" data-i18n-title="tip.settings">⚙</button>
+        <button id="btn-refresh" data-i18n-title="tip.refresh">⟳</button>
       </span>
     </div>
     <div id="tree"></div>
     <section id="inbox">
-      <div id="inbox-header">📥 _inbox<button id="btn-paste" title="クリップボードを_inboxへ (Ctrl+V)">📋</button><button id="btn-clear-feed" title="表示をクリア">✕</button><span class="hint">ドロップ/Ctrl+Vで受領</span></div>
+      <div id="inbox-header">📥 _inbox<button id="btn-paste" data-i18n-title="tip.paste">📋</button><button id="btn-clear-feed" data-i18n-title="tip.clearFeed">✕</button><span class="hint" data-i18n="inbox.hint"></span></div>
       <div id="inbox-feed"></div>
     </section>
-    <div id="sidebar-footer">ファイルはドラッグで外に出せます</div>
+    <div id="sidebar-footer" data-i18n="sidebar.footer"></div>
   </aside>
-  <div id="splitter" title="ドラッグで幅調整"></div>
+  <div id="splitter" data-i18n-title="tip.splitter"></div>
   <main id="main">
     <section id="preview">
       <div id="preview-header">
-        <span id="preview-title">ファイルを選ぶとここに表示</span>
+        <span id="preview-title" data-i18n="preview.empty"></span>
         <span id="preview-actions"></span>
       </div>
       <div id="preview-body">
         <div class="welcome">
-          <h2>claude-work デスク</h2>
-          <p>左のツリーからファイルをクリック → プレビュー</p>
-          <p>ファイルを<b>ウィンドウの外へドラッグ</b> → Explorer やチャットに取り出し</p>
-          <p>ファイルを<b>この窓にドロップ</b> → <code>_inbox/</code> に受領</p>
-          <p>ダブルクリック → 既定のアプリで開く ／ 右クリック → メニュー</p>
-          <p>上のパス欄にフルパスを貼って Enter → そのフォルダを表示（worktreeレーンの覗き見用）</p>
-          <p>プレビュー右上の<b>入力</b> → 書き込みモード（Ctrl+S で保存）</p>
+          <h2>claude-work Desk</h2>
+          <p data-i18n="welcome.tree" data-i18n-html></p>
+          <p data-i18n="welcome.dragOut" data-i18n-html></p>
+          <p data-i18n="welcome.dropIn" data-i18n-html></p>
+          <p data-i18n="welcome.dblclick" data-i18n-html></p>
+          <p data-i18n="welcome.pathbar" data-i18n-html></p>
+          <p data-i18n="welcome.edit" data-i18n-html></p>
         </div>
       </div>
     </section>
   </main>
 </div>
 </div>
-<div id="drop-overlay"><div class="drop-msg">📥 _inbox に入れる</div></div>
+<div id="drop-overlay"><div class="drop-msg" data-i18n="drop.msg"></div></div>
 <div id="zoom-toast"></div>
 <div id="settings-overlay">
   <div id="settings-panel">
-    <h3>⚙ 設定 <span id="set-version"></span></h3>
-    <label>ワークスペースフォルダ</label>
-    <div class="root-row"><span id="set-root-path"></span><button id="set-root-change">変更…</button></div>
-    <label>文字サイズ <span id="zoom-val">100%</span>（Ctrl+ホイールでも変更可）</label>
+    <h3><span data-i18n="set.title"></span> <span id="set-version"></span></h3>
+    <label data-i18n="set.language"></label>
+    <select id="set-lang"></select>
+    <label data-i18n="set.workspace"></label>
+    <div class="root-row"><span id="set-root-path"></span><button id="set-root-change" data-i18n="set.change"></button></div>
+    <label><span data-i18n="set.fontSize"></span> <span id="zoom-val">100%</span> <span data-i18n="set.fontSizeHint"></span></label>
     <input type="range" id="set-zoom" min="50" max="250" step="5" value="100">
-    <label>フォント（画面全体・マークダウン表示）</label>
+    <label data-i18n="set.fontUi"></label>
     <select id="set-font-ui">
-      <option value="">既定（Segoe UI / Yu Gothic UI）</option>
-      <option value="Meiryo">メイリオ</option>
-      <option value="Yu Gothic">游ゴシック</option>
-      <option value="BIZ UDPGothic">BIZ UDPゴシック</option>
-      <option value="UD Digi Kyokasho N-R">UDデジタル教科書体</option>
-      <option value="MS PGothic">MS Pゴシック</option>
+      <option value="" data-i18n="set.fontDefaultUi"></option>
+      <option value="Meiryo" data-i18n="font.meiryo"></option>
+      <option value="Yu Gothic" data-i18n="font.yugothic"></option>
+      <option value="BIZ UDPGothic" data-i18n="font.bizudp"></option>
+      <option value="UD Digi Kyokasho N-R" data-i18n="font.uddigi"></option>
+      <option value="MS PGothic" data-i18n="font.mspgothic"></option>
       <option value="Noto Sans JP">Noto Sans JP</option>
     </select>
-    <input type="text" id="set-font-ui-custom" placeholder="フォント名を直接入力（選択より優先）">
-    <label>フォント（コード・行番号・等幅）</label>
+    <input type="text" id="set-font-ui-custom" data-i18n-ph="ph.fontCustom">
+    <label data-i18n="set.fontMono"></label>
     <select id="set-font-mono">
-      <option value="">既定（Consolas）</option>
+      <option value="" data-i18n="set.fontDefaultMono"></option>
       <option value="Cascadia Code">Cascadia Code</option>
       <option value="Cascadia Mono">Cascadia Mono</option>
-      <option value="BIZ UDGothic">BIZ UDゴシック（等幅）</option>
-      <option value="MS Gothic">MSゴシック</option>
+      <option value="BIZ UDGothic" data-i18n="font.bizud"></option>
+      <option value="MS Gothic" data-i18n="font.msgothic"></option>
       <option value="Courier New">Courier New</option>
     </select>
-    <input type="text" id="set-font-mono-custom" placeholder="フォント名を直接入力（選択より優先）">
+    <input type="text" id="set-font-mono-custom" data-i18n-ph="ph.fontCustom">
     <div class="settings-actions">
-      <button id="set-reset">初期値に戻す</button>
-      <button id="set-close">閉じる</button>
+      <button id="set-reset" data-i18n="set.reset"></button>
+      <button id="set-close" data-i18n="set.close"></button>
     </div>
   </div>
 </div>
 <div id="ctxmenu"></div>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
