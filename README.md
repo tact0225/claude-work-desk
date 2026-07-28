@@ -12,6 +12,31 @@ If you run Claude Code (CLI) inside WSL, moving files between Windows and your w
 an `_inbox/` that anything can be dropped into. Tables render, code blocks get a
 Copy button on hover, and `[[wikilinks]]` are clickable.*
 
+## Why this exists
+
+I used to **run Obsidian inside WSL** and do all of this there. That is where I hit the wall.
+
+Japanese input did not work. That is not Obsidian's fault — **WSLg does not pass the
+Windows IME through to Linux apps**, and [the request for it](https://github.com/microsoft/wslg/issues/9)
+has been open since 2021. Sometimes input stopped registering at all. Going fullscreen
+left the pointer and the caret slightly out of sync
+([another open one](https://github.com/microsoft/wslg/issues/502)); snapping the window
+with Win+Arrow fixed it, but having to is its own kind of annoying.
+
+What finally decided it, though, was that **Claude Code kept telling me things like
+"L49"**. Line 49 of that note. Obsidian does not show line numbers. I am not counting
+to 49 by hand.
+
+And it only opens Markdown. I wanted something that shows me the inside of any file.
+
+So I rebuilt it outside WSLg — **as a native Windows app**. Then I got greedy: I wanted
+a file to land in `_inbox/` just by being dragged onto the window. What Claude Code
+generates comes out in `_outbox/`, so dragging straight from there into Google Drive
+would save a step. And I added the path bar at the top so I could look into a worktree
+lane without any ceremony.
+
+That is the whole story.
+
 ## What it does
 
 ### Rendered to read, raw to fix
