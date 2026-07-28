@@ -6,6 +6,20 @@
 
 If you run Claude Code (CLI) inside WSL, moving files between Windows and your workspace is a constant papercut: Explorer over `\\wsl.localhost\` is slow, Obsidian only shows Markdown, VS Code renders Markdown poorly. This app is a single window that fills that gap — it makes working with Claude Code feel like **tossing files into a chat**.
 
+## Install
+
+**There is no installer to download.** Run this in a WSL terminal and you are done:
+
+```bash
+git clone https://github.com/tact0225/claude-work-desk.git
+cd claude-work-desk
+bash sync_to_windows.sh
+```
+
+That one script copies the app to `%LOCALAPPDATA%\claude-work-desk`, installs its
+dependencies, and puts a shortcut on your desktop. To update later: `git pull` and run
+it again — your settings survive. Prerequisites and the longer version: [Setup](#setup).
+
 ![The workspace tree on the left, a rendered Markdown note on the right, and the _inbox panel below the tree](docs/images/hero.png)
 
 *One window: your whole workspace as a tree, a real Markdown preview beside it, and

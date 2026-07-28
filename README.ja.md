@@ -9,6 +9,18 @@ Explorerで`\\wsl.localhost\...`を開くのは重いし、Obsidianはmdしか�
 
 このアプリは、その隙間を埋める1枚のウィンドウです。**Claude Codeとの共同作業を「チャットにファイルを投げる感覚」にする**ために作りました。
 
+## インストール
+
+**ダウンロードするインストーラはありません。** WSLのターミナルで以下を実行すれば終わりです:
+
+```bash
+git clone https://github.com/tact0225/claude-work-desk.git
+cd claude-work-desk
+bash sync_to_windows.sh
+```
+
+このスクリプト1本で `%LOCALAPPDATA%\claude-work-desk` への配布・依存インストール・デスクトップショートカット作成まで終わります。更新は `git pull` して再実行するだけ（設定は保持されます）。必要なものと詳しい手順は[セットアップ](#セットアップ)。
+
 ![左にワークスペースのツリー、右にMarkdownのレンダリング表示、ツリーの下に_inboxパネル](docs/images/hero.png)
 
 *1枚の窓に、ワークスペース全体のツリーと、その横に本物のMarkdownプレビュー、下に何でも投げ込める`_inbox/`。表もレンダリングされ、コードブロックにはホバーでコピーボタンが出て、`[[wikilink]]`はクリックできます。*
