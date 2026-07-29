@@ -16,6 +16,19 @@ let browseRoot = ''
 let editMode = false
 let editDirty = false
 let editorEl = null
+// 入力モード中に外部（レナード）がファイルを書き換えた印。上書きせず知らせるだけに使う。
+let externalChange = false
+
+// ---------- 自動更新の状態 ----------
+// ツリーの中身を差分で貼り替えるので、行の実体を path から引けるようにしておく。
+// 全消し再描画を撃たない＝スクロール位置・選択行・展開状態がそのまま残る（本田さん明示）。
+const nodeByPath = new Map() // pathKey → ノードの wrap 要素
+let rootBox = null           // ツリー最上段のコンテナ（差分適用の起点）
+let treeEpoch = 0            // ツリーを作り直したら +1。走行中のポーリング結果を捨てる目印
+let watchKeys = new Set()    // 新着ウォッチ中のフォルダ（pathKey）
+let unreadKeys = new Set()   // 未読ファイル（pathKey）
+let unreadCounts = new Map()  // ウォッチフォルダ（pathKey）→ 直下の未読数
+let previewMtime = null      // 今プレビューに出している版の mtime
 
 init()
 
@@ -64,8 +77,43 @@ async function init() {
   setupDrop()
   setupGlobal()
   setupPathBar()
+  // ⚠ ルートピッカーで止まる経路でも腐り検知の窓口を空にしない。空文字だと幅が0になり、
+  //    「止まっている」ことが画面に出ないうえクリックでの再開すら押せない（QA致命1）
+  setSyncStatus()
   if (!CONFIG.rootOk) { showRootPicker(); return }
-  await setBrowseRoot(await startingRoot())
+  await openWorkspace(await startingRoot())
+}
+
+// ワークスペースを開く＝ツリーを出して自動更新を動かすところまで。
+// ⚠ init と reloadRoot で手順を書き分けない。片方に startPolling を書き忘れるだけで、
+//    その経路で起動したセッションは自動更新も未読の印も丸ごと死に、v0.4.3 の
+//    「手動F5でしか更新されない Desk」に黙って戻る（QA致命1）。ルートピッカー経由＝
+//    初回起動と、WSLが上がる前にDeskを開いた朝の「選び直し」で実際に踏む動線。
+// ⚠ ツリー構築が転んでもポーリングだけは必ず始める（finally）。途中の例外ひとつで
+//    そのセッションが二度と自動更新しなくなる、という同じ壊れ方をここで閉じておく。
+async function openWorkspace(dir) {
+  try {
+    await setBrowseRoot(dir)
+  } catch (err) {
+    console.error('[init] ツリーの初期表示に失敗:', err)
+  } finally {
+    await startAutoRefresh()
+  }
+}
+
+// 未読の取り込み → 印 → ポーリング開始。
+async function startAutoRefresh() {
+  try {
+    setWatchState(await api.getWatch())
+    applyMarks()
+  } catch (err) {
+    console.warn('[watch]', err)
+  } finally {
+    // 何が落ちてもポーリングは始める。何度呼んでも安全＝schedulePoll が毎回 clearTimeout して
+    // から張り直すのでタイマーは常に1本、失敗で止まっていた場合はここで復帰する
+    // （ルートを選び直した＝再開したい、と読む）
+    startPolling()
+  }
 }
 
 // 前回見ていたフォルダを復元。撤収済みレーン等で消えていたら黙ってワークスペースへ戻る
@@ -82,9 +130,9 @@ async function startingRoot() {
 // ルート変更（初回設定・設定パネルからの変更 共通）
 async function reloadRoot() {
   CONFIG = await api.getConfig()
-  if (!CONFIG.rootOk) { showRootPicker(); return }
+  if (!CONFIG.rootOk) { showRootPicker(); setSyncStatus(); return }
   localStorage.removeItem('browseRoot')
-  await setBrowseRoot(CONFIG.root)
+  await openWorkspace(CONFIG.root)
 }
 
 // ---------- パス欄（アドレスバー） ----------
@@ -94,9 +142,14 @@ function baseName(p) {
   return s.split(/[\\/]/).pop() || s
 }
 
+// パスの比較・Mapのキーはこれ1本に統一する。main 側と renderer 側で正規化がズレると
+// 未読の印だけ当たらない（クリックしても消えない）という気づきにくい壊れ方をする。
+function pathKey(p) {
+  return String(p || '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
+}
+
 function samePath(a, b) {
-  const n = (p) => String(p || '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
-  return n(a) === n(b)
+  return pathKey(a) === pathKey(b)
 }
 
 function parentOf(p) {
@@ -217,11 +270,17 @@ async function loadTreeRoot() {
   // 呼び出し側ごとに guard を書くと必ず漏れるので、入口で止める（QA指摘）
   if (!CONFIG || !CONFIG.rootOk) return
   const tree = $('#tree')
+  treeEpoch++ // 走っている途中のポーリング結果を捨てる（作り直した後のツリーに古い差分を当てない）
+  nodeByPath.clear()
+  selectedRow = null
+  rootBox = null
   tree.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
   const box = document.createElement('div')
   await loadChildren(browseRoot || CONFIG.root, box, 0)
   tree.innerHTML = ''
   tree.appendChild(box)
+  rootBox = box
+  applyMarks()
 }
 
 async function loadChildren(dirPath, container, depth) {
@@ -239,6 +298,7 @@ async function loadChildren(dirPath, container, depth) {
 
 function makeNode(en, depth) {
   const wrap = document.createElement('div')
+  wrap.className = 'node'
   const row = document.createElement('div')
   row.className = 'row ' + (en.isDir ? 'dir' : 'file')
   row.style.paddingLeft = (8 + depth * 14) + 'px'
@@ -253,25 +313,34 @@ function makeNode(en, depth) {
   const label = document.createElement('span')
   label.className = 'fname'
   label.textContent = en.name
+  // 新着ウォッチ（👁）と未読（●）の印。中身が空でも先に置いておく＝
+  // 印が付いた時に行の構造を組み替えずテキストの差し替えだけで済む。
+  const badge = document.createElement('span')
+  badge.className = 'badge'
 
-  row.append(arrow, icon, label)
+  row.append(arrow, icon, label, badge)
   wrap.appendChild(row)
 
-  let childBox = null
-  let loaded = false
-  let open = false
+  // ⚠ 開閉状態を closure に隠すと2秒ごとの差分適用から読めない（どこが開いているか分からず
+  //    再帰できない）。状態は要素側に持たせる。
+  const st = { path: en.path, name: en.name, isDir: en.isDir, depth, row, arrow, icon, badge, childBox: null, loaded: false, open: false, mark: '' }
+  wrap._node = st
+  nodeByPath.set(pathKey(en.path), wrap)
 
   async function toggleDir(forceOpen) {
-    if (!childBox) { childBox = document.createElement('div'); wrap.appendChild(childBox) }
-    open = forceOpen === undefined ? !open : forceOpen
-    arrow.textContent = open ? '▾' : '▸'
-    icon.textContent = open ? '📂' : '📁'
-    childBox.style.display = open ? '' : 'none'
-    if (open) openDirs.add(en.path); else openDirs.delete(en.path)
-    if (open && !loaded) {
-      childBox.innerHTML = '<div class="loading">…</div>'
-      await loadChildren(en.path, childBox, depth + 1)
-      loaded = true
+    if (!st.childBox) { st.childBox = document.createElement('div'); wrap.appendChild(st.childBox) }
+    st.open = forceOpen === undefined ? !st.open : forceOpen
+    arrow.textContent = st.open ? '▾' : '▸'
+    icon.textContent = st.open ? '📂' : '📁'
+    st.childBox.style.display = st.open ? '' : 'none'
+    if (st.open) openDirs.add(en.path); else openDirs.delete(en.path)
+    if (st.open && !st.loaded) {
+      st.childBox.innerHTML = '<div class="loading">…</div>'
+      await loadChildren(en.path, st.childBox, depth + 1)
+      // ⚠ loaded を立てるのは読み終えた後。先に立てると読み込み中のコンテナに
+      //    ポーリングの差分が割り込み、二重に行が並ぶ。
+      st.loaded = true
+      applyMarks()
     }
   }
 
@@ -309,6 +378,129 @@ function fileIcon(name) {
   return '📄'
 }
 
+// ---------- ツリーの差分適用（自動更新の本体） ----------
+// 増えた行を挿す・消えた行を抜く・変わらない行のDOMには触らない。
+// ⚠ 2秒ごとに loadTreeRoot()（全消し再描画）を撃つのは禁止。本田さんは左ペインを
+//    出しっぱなしで描き変わる瞬間を常に見ているので、スクロール位置と選択行が飛ぶ。
+
+// ノード（とその配下）を捨てる。参照を残すと選択行が幽霊になり、
+// openDirs に消えたフォルダが溜まってポーリングが毎回そこを読みに行く。
+function dropNode(el) {
+  const list = [el, ...el.querySelectorAll('.node')]
+  for (const sub of list) {
+    const st = sub._node
+    if (!st) continue
+    nodeByPath.delete(pathKey(st.path))
+    openDirs.delete(st.path)
+    if (selectedRow === st.row) selectedRow = null
+  }
+  el.remove()
+}
+
+function applyDirDiff(container, depth, entries) {
+  const want = entries.filter(en => !CONFIG.hidden.includes(en.name))
+  // ⚠ 「読み込み中…」やエラー行が混ざっていると位置合わせが1つずつずれる。
+  //    差分を当てる前に、ノード以外の子は落としておく。
+  for (const el of [...container.children]) if (!el._node) el.remove()
+
+  const have = new Map()
+  for (const el of container.children) have.set(pathKey(el._node.path), el)
+  const wanted = new Set(want.map(en => pathKey(en.path)))
+  for (const [key, el] of have) {
+    if (!wanted.has(key)) { dropNode(el); have.delete(key) }
+  }
+
+  let i = 0
+  for (const en of want) {
+    const key = pathKey(en.path)
+    let el = have.get(key)
+    // 同じ名前でファイル↔フォルダが入れ替わった時だけ作り直す（行の性格ごと変わるため）
+    if (el && el._node.isDir !== en.isDir) { dropNode(el); el = undefined }
+    if (!el) el = makeNode(en, depth)
+    if (container.children[i] !== el) container.insertBefore(el, container.children[i] || null)
+    i++
+  }
+}
+
+// 展開しているフォルダだけを辿って差分を当てる（畳んである配下は見ない＝そのぶん軽い）
+function refreshTree(container, dirPath, depth, res) {
+  const r = res.dirs[dirPath]
+  if (!r) return
+  // ⚠ 読めなかったフォルダは今の表示をそのまま残す。消すとWSLが一瞬途切れただけで
+  //    ツリーが真っ白になり、戻ってくるまで何も見えなくなる。
+  if (r.error || !r.entries) return
+  applyDirDiff(container, depth, r.entries)
+  for (const el of [...container.children]) {
+    const st = el._node
+    if (st && st.isDir && st.open && st.loaded && st.childBox) refreshTree(st.childBox, st.path, depth + 1, res)
+  }
+}
+
+// ポーリングで見るフォルダ = ツリーのルート＋今ひらいて見えているフォルダ（浅く）。
+// ⚠ openDirs をそのまま使わない。親を畳んでも子は openDirs に残る＝畳んだ先の
+//    見えないフォルダを2秒ごとに読み続けることになる。実際に見えている連なりだけ辿る。
+function pollDirs() {
+  const dirs = []
+  if (!rootBox || !rootBox.isConnected || !browseRoot) return dirs
+  dirs.push(browseRoot)
+  const walk = (container) => {
+    for (const el of container.children) {
+      const st = el._node
+      if (st && st.isDir && st.open && st.loaded && st.childBox) { dirs.push(st.path); walk(st.childBox) }
+    }
+  }
+  walk(rootBox)
+  return dirs
+}
+
+// ---------- 新着（未読）の印 ----------
+
+function setWatchState(payload) {
+  watchKeys = new Set((payload.watchDirs || []).map(pathKey))
+  unreadKeys = new Set((payload.unread || []).map(pathKey))
+  unreadCounts = new Map(Object.entries(payload.counts || {}).map(([k, v]) => [pathKey(k), v]))
+}
+
+// 未読の印は数秒で消さない＝クリックするまでずっと残す（本田さん明示）。
+// 描き替えは変化した行だけに絞る（毎tick全行を触るとツリー全体が再計算される）。
+function applyMarks() {
+  for (const [key, el] of [...nodeByPath]) {
+    if (!el.isConnected) { nodeByPath.delete(key); continue } // 作り直し前の取り残しを掃除
+    const st = el._node
+    const watched = st.isDir && watchKeys.has(key)
+    const count = watched ? (unreadCounts.get(key) || 0) : 0
+    const isUnread = !st.isDir && unreadKeys.has(key)
+    // 畳んでいても気づけるよう、ウォッチフォルダの行自体にも配下の未読を出す
+    const mark = isUnread || count ? '●' : (watched ? '👁' : '')
+    if (st.row.classList.contains('unread') !== isUnread) st.row.classList.toggle('unread', isUnread)
+    if (st.row.classList.contains('watched') !== watched) st.row.classList.toggle('watched', watched)
+    // ⚠ 件数まで含めて比べる。印の文字だけで比べると 1件→2件 で吹き出しが古いまま残る
+    const sig = mark + '/' + count
+    if (st.mark !== sig) {
+      st.mark = sig
+      st.badge.textContent = mark
+      st.badge.classList.toggle('new', mark === '●')
+      st.badge.title = count ? t('tip.unread', { n: count }) : (isUnread ? t('tip.unread', { n: 1 }) : (watched ? t('tip.watched') : ''))
+    }
+  }
+}
+
+async function toggleWatch(dir, on) {
+  if (on) {
+    // 名前でなく実測で弾く（ワークスペース全体・巨大フォルダを指定させない）
+    const probe = await api.probeWatch(dir, browseRoot)
+    if (!probe.ok) {
+      // 断る理由はそのまま見せる。定型文だけ出すと「なぜ弾かれたか分からない」になる（既存のQA指摘と同じ轍）
+      if (probe.reason === 'big') alert(t('watch.refusedBig', { files: probe.files }))
+      else if (probe.reason === 'root') alert(t('watch.refusedRoot'))
+      else alert(t('err.read', { msg: probe.error || '' }))
+      return
+    }
+  }
+  setWatchState(await api.setWatch(dir, on))
+  applyMarks()
+}
+
 // ---------- プレビュー ----------
 
 async function openPreview(p) {
@@ -321,7 +513,16 @@ async function openPreview(p) {
     return false
   }
   currentFile = res
+  previewMtime = res.mtimeMs
+  externalChange = false
   renderPreview(res)
+  // 開いた＝読んだ、とみなして未読を落とす。印が消えるのを待たずに先に描き替える
+  // （IPCの往復ぶん色が残ると「クリックしたのに消えない」と見える）
+  if (unreadKeys.has(pathKey(p))) {
+    unreadKeys.delete(pathKey(p))
+    applyMarks()
+    api.markRead(p).then(payload => { setWatchState(payload); applyMarks() }).catch(err => console.warn('[watch]', err))
+  }
   return true
 }
 
@@ -442,8 +643,13 @@ function updatePreviewTitle(res) {
   const f = res || currentFile
   if (!f) return
   const mark = editMode ? (editDirty ? t('title.editingDirty') : t('title.editing')) : ''
-  $('#preview-title').textContent = `${mark}${f.name}  (${fmtSize(f.size)})`
-  $('#preview-title').classList.toggle('editing', editMode)
+  // 入力モード中に外部で書き換わった時の告知。上書きはせず、保存/破棄の判断は本田さんに委ねる
+  const ext = externalChange ? t('title.external') : ''
+  const el = $('#preview-title')
+  el.textContent = `${mark}${ext}${f.name}  (${fmtSize(f.size)})`
+  el.title = externalChange ? t('tip.external') : ''
+  el.classList.toggle('editing', editMode)
+  el.classList.toggle('external', externalChange)
 }
 
 function renderEditor(res) {
@@ -482,12 +688,16 @@ function toggleEdit() {
 async function leaveEditMode() {
   if (!editMode) return true
   if (editDirty && !confirm(t('confirm.discard'))) return false
-  const wasDirty = editDirty
+  const stale = editDirty || externalChange // 外部で書き換わっていた場合もディスクの内容に戻す
   editMode = false
   editDirty = false
   editorEl = null
-  if (wasDirty && currentFile) {
-    try { currentFile = await api.readFile(currentFile.path) } catch (e) { /* 消えていたら現状のまま */ }
+  externalChange = false
+  if (stale && currentFile) {
+    try {
+      currentFile = await api.readFile(currentFile.path)
+      previewMtime = currentFile.mtimeMs
+    } catch (e) { /* 消えていたら現状のまま */ }
   }
   return true
 }
@@ -502,6 +712,10 @@ async function saveEdit() {
   // 読み直せなかった時も source は書いた内容に更新する（でないと ● が消えず未保存に見える）
   try { currentFile = await api.readFile(currentFile.path) }
   catch (e) { currentFile.size = r.size; currentFile.source = content }
+  // ⚠ 自分の保存で mtime が動く。ここで持ち直さないと次のポーリングが
+  //    「外部で書き換わった」と誤検知して ⚠ を出す（自分の書き込みなのに）
+  previewMtime = currentFile.mtimeMs != null ? currentFile.mtimeMs : previewMtime
+  externalChange = false
   refreshDirty() // 保存中に打ち続けていた場合は ● が残る
   updatePreviewTitle()
   const btn = $('#btn-save')
@@ -648,29 +862,56 @@ function addFeedEntry(r) {
 
 // ---------- 右クリックメニュー ----------
 
+// 新着ウォッチに指定できないフォルダ（main の isTooBroad と同じ線を引く）。
+// ⚠ 「一致」だけを見ると、ワークスペースの親フォルダを表示している時に root の祖先の行が
+//    有効に見え、押した瞬間に main が root を理由に断って alert が出る＝「出すなら無効表示に」
+//    という約束が半端になる（QA指摘）。main が正なので判定をこちらに揃える。
+function isBroadDir(p) {
+  const d = pathKey(p)
+  const r = pathKey(CONFIG.root)
+  return d === r || (!!r && r.startsWith(d + '\\')) || samePath(p, browseRoot)
+}
+
 function showCtxMenu(e, en) {
-  showMenu(e, [
+  const items = [
     [t('ctx.open'), () => api.openPath(en.path)],
     [t('ctx.explorer'), () => api.showInFolder(en.path)],
     [t('ctx.copyWin'), () => navigator.clipboard.writeText(en.path)],
     [t('ctx.copyWsl'), () => navigator.clipboard.writeText(toWslPath(en.path))],
-  ])
+  ]
+  // 新着ウォッチはフォルダの行にだけ出す。ワークスペース全体と今見ているルートは
+  // 指定させない（全部が光ると未読という印そのものが意味を失う・本田さん明示）。
+  // 理由を見せたいので、隠さず無効表示にする。
+  if (en.isDir) {
+    const on = watchKeys.has(pathKey(en.path))
+    const broad = isBroadDir(en.path)
+    items.push([
+      (on ? '✓ ' : '') + t('ctx.watchNew'),
+      () => toggleWatch(en.path, !on),
+      { disabled: broad && !on, title: t('watch.refusedRoot') },
+    ])
+  }
+  showMenu(e, items)
 }
 
 function showMenu(e, items) {
   e.preventDefault()
   const m = $('#ctxmenu')
   m.innerHTML = ''
-  for (const [labelText, fn] of items) {
+  for (const [labelText, fn, opt] of items) {
     const it = document.createElement('div')
-    it.className = 'ctxitem'
+    it.className = 'ctxitem' + (opt && opt.disabled ? ' disabled' : '')
     it.textContent = labelText
-    it.addEventListener('click', () => { hideCtxMenu(); fn() })
+    if (opt && opt.title) it.title = opt.title
+    if (opt && opt.disabled) it.addEventListener('click', (ev) => ev.stopPropagation()) // 閉じずに理由（title）を読ませる
+    else it.addEventListener('click', () => { hideCtxMenu(); fn() })
     m.appendChild(it)
   }
-  m.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
-  m.style.top = Math.min(e.clientY, window.innerHeight - 140) + 'px'
+  // ⚠ 位置は「出してから実寸で」決める。項目数を増やした時に決め打ちの高さが嘘になり、
+  //    一番下の項目が画面外に出る（5つ目を足した時に実際に起きる）
   m.classList.add('show')
+  m.style.left = Math.min(e.clientX, Math.max(0, window.innerWidth - m.offsetWidth - 8)) + 'px'
+  m.style.top = Math.min(e.clientY, Math.max(0, window.innerHeight - m.offsetHeight - 8)) + 'px'
 }
 
 function hideCtxMenu() { $('#ctxmenu').classList.remove('show') }
@@ -679,6 +920,159 @@ function hideCtxMenu() { $('#ctxmenu').classList.remove('show') }
 function toWslPath(p) {
   const m = p.replace(/\\/g, '/').match(/^\/\/wsl(\.localhost|\$)\/[^/]+(\/.*)$/)
   return m ? m[2] : p
+}
+
+// ---------- 自動更新のポーリング ----------
+// WSL越しでは fs.watch が使えない（EISDIR で即死ぬ）ので OSの変更通知は無い。ポーリング一択。
+// タイマーは renderer 側に置く: 何を見るか（展開中フォルダ・開いているファイル）は画面の状態そのもので、
+// main に持たせると同じ状態を二重管理することになる。fs を触るのは main（既存のIPC設計どおり）。
+
+const POLL_MIN_MS = 2000
+const POLL_MAX_FAILS = 3 // 連続でこれだけ失敗したら自動で止めて画面に出す
+
+let pollTimer = null
+let pollFails = 0
+let pollStopped = false
+let pollBusy = false     // 1tickが走行中（応答待ち）。重ねて走らせない
+let pollIdle = true      // まだ一度も成功していない／ワークスペースに届かず空回りしている
+let lastPollAt = 0
+let lastPollError = ''   // 直近のtickで出た例外。止まる手前でも画面に出す（緑のまま黙らせない）
+
+function schedulePoll(delay) {
+  clearTimeout(pollTimer)
+  pollTimer = setTimeout(pollTick, Math.max(0, delay))
+}
+
+function startPolling() {
+  pollStopped = false
+  pollFails = 0
+  lastPollError = ''
+  schedulePoll(POLL_MIN_MS)
+  setSyncStatus()
+}
+
+function stopPolling(msg) {
+  pollStopped = true
+  clearTimeout(pollTimer)
+  pollTimer = null
+  console.error('[poll] 自動更新を停止しました:', msg)
+  setSyncStatus(msg)
+}
+
+// 腐り検知の窓口。生きていれば最終確認時刻、止まったら理由が読める＝
+// 「更新されない Desk」に黙って戻らない（クリックで即再開）。
+// ⚠ 状態は3つ（停止＝赤／待機＝空回り中／稼働＝最終確認時刻）。どの状態でも必ず何か書く。
+//    空文字にすると幅が0になって存在ごと消え、腐っていることにも気づけずクリックも押せない。
+// errMsg を渡した時だけ直近エラーを更新する（'' で明示的にクリア・省略で据え置き）。
+function setSyncStatus(errMsg) {
+  const el = $('#sync-status')
+  if (!el) return
+  if (errMsg !== undefined) lastPollError = errMsg || ''
+  el.classList.toggle('bad', pollStopped || !!lastPollError)
+  el.classList.toggle('idle', !pollStopped && !lastPollError && pollIdle)
+  if (pollStopped) {
+    el.textContent = t('sync.stopped')
+    el.title = t('tip.syncStopped', { msg: lastPollError })
+    return
+  }
+  // ワークスペースに届いていない間は時計を進めようがない。無印のまま凍らせると
+  // 「通常色なのに更新されない」に見えるので、待機中だと分かる表示にする
+  if (pollIdle) {
+    el.textContent = t('sync.waiting')
+    el.title = lastPollError ? t('tip.syncError', { msg: lastPollError }) : t('tip.syncWaiting')
+    return
+  }
+  const at = new Date(lastPollAt)
+  const pad = (n) => String(n).padStart(2, '0')
+  const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+  el.textContent = (lastPollError ? '⚠ ' : '⟳ ') + clock
+  el.title = lastPollError ? t('tip.syncError', { msg: lastPollError }) : t('tip.syncOk')
+}
+
+async function pollTick() {
+  pollTimer = null
+  // 最小化中は止める。復帰は visibilitychange が即1回叩き直す（ここで予約し直さない）
+  if (pollStopped || document.hidden) return
+  // ⚠ 走行中に重ねない。#sync-status の連打や最小化⇄復帰の速い往復で schedulePoll(0) が
+  //    重なると、前のtickの応答が後から当たって1周ぶん古い差分を書く／プレビューを二重に描く
+  if (pollBusy) { schedulePoll(POLL_MIN_MS); return }
+  if (!CONFIG || !CONFIG.rootOk) {
+    pollIdle = true
+    setSyncStatus('')
+    schedulePoll(POLL_MIN_MS)
+    return
+  }
+
+  pollBusy = true
+  const epoch = treeEpoch
+  let res
+  try {
+    res = await api.pollFs({ dirs: pollDirs(), previewPath: currentFile ? currentFile.path : null })
+  } catch (err) {
+    // ⚠ 握り潰さない。ポーリングが唯一の生命線で、黙って止まると本田さんは原因が分からないまま
+    //    手動リロードに戻る（仕様: 腐り検知）
+    console.error('[poll]', err)
+    pollBusy = false
+    if (++pollFails >= POLL_MAX_FAILS) { stopPolling(String(err.message || err)); return }
+    setSyncStatus(String(err.message || err))
+    schedulePoll(POLL_MIN_MS)
+    return
+  }
+
+  lastPollAt = Date.now()
+  pollIdle = false
+  let applyErr = ''
+  try {
+    setWatchState(res)
+    // ツリーを作り直した後なら、この結果は古いツリー向け＝当てない
+    if (epoch === treeEpoch && rootBox && rootBox.isConnected) refreshTree(rootBox, browseRoot, 0, res)
+    applyMarks()
+    await refreshPreview(res.preview)
+  } catch (err) {
+    // ⚠ ここも握り潰さない。適用フェーズで落ちるとツリーも未読もプレビューも止まるのに、
+    //    IPCは成功しているので「最終確認 HH:MM:SS」だけ進み続け、画面が「動いています」と
+    //    嘘をつく。時刻は進むのに中身が更新されない、が一番気づけない壊れ方（仕様§4）
+    console.error('[poll:apply]', err)
+    applyErr = String(err.message || err)
+    if (++pollFails >= POLL_MAX_FAILS) { pollBusy = false; stopPolling(applyErr); return }
+  }
+  // ⚠ 失敗カウンタは「IPCも適用も通った」時だけ戻す。IPC成功で毎回0に戻すと、
+  //    適用フェーズが壊れ続けても3回に到達せず永久に止まらない
+  if (!applyErr) pollFails = 0
+  pollBusy = false
+  setSyncStatus(applyErr)
+  // 自己調整: 重いフォルダを掴んでもCPUを食い潰せないようにする最終backstop。
+  // 更新が遅くなるだけでPCは重くならない。
+  schedulePoll(Math.max(POLL_MIN_MS, (res.ms || 0) * 20))
+}
+
+// 開いているファイルが外部（レナード）に書き換えられたら読み直す
+async function refreshPreview(info) {
+  if (!currentFile || !info) return
+  // 消えたファイルはそのまま出しておく（開いていた内容が突然消えるほうが困る）
+  if (info.gone) return
+  if (previewMtime == null) { previewMtime = info.mtimeMs; return }
+  // ⚠ info は「そのtickの先頭で main が stat した値」＝自分の保存より前に採られた応答が
+  //    後から返ってくる。この古い mtime を当てると previewMtime が巻き戻り、入力モードでは
+  //    自分で保存しただけなのに「⚠ 外部で更新」が点いて次tick以降も真のまま残る（QA指摘）。
+  //    saveEdit 側は「保存が先・poll応答が後」しか潰せないので、逆順はここで捨てる。
+  if (info.mtimeMs != null && info.mtimeMs < previewMtime) return
+  if (info.mtimeMs === previewMtime && info.size === currentFile.size) return
+  // ⚠ 入力モード中は絶対に上書きしない。編集中バッファを外部変更で潰すのは事故（本田さん明示）。
+  //    印だけ出して、保存/破棄の判断は本田さんに委ねる。
+  if (editMode) { previewMtime = info.mtimeMs; externalChange = true; updatePreviewTitle(); return }
+  const target = currentFile.path
+  const body = $('#preview-body')
+  const top = body.scrollTop
+  let res
+  try { res = await api.readFile(target) } catch (e) { return }
+  // ⚠ 読んでいる間に別のファイルを開かれていたら捨てる。当てると
+  //    「クリックしたのに一瞬前のファイルが出る」になる
+  if (!currentFile || currentFile.path !== target || editMode) return
+  currentFile = res
+  previewMtime = res.mtimeMs
+  renderPreview(res)
+  body.scrollTop = top // レナードが追記していくのを左側で追える（先頭に戻さない）
 }
 
 // ---------- グローバル ----------
@@ -867,6 +1261,14 @@ function isTypingTarget(el) {
 function setupGlobal() {
   $('#btn-refresh').addEventListener('click', loadTreeRoot)
   $('#btn-paste').addEventListener('click', pasteToInbox)
+  // 最小化中は Electron 側でもタイマーが絞られるが、当てにせず自分で止める。
+  // 復帰時は待たずに1回走らせる（左ペインに戻った瞬間が一番見たい時）
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { clearTimeout(pollTimer); pollTimer = null }
+    else if (!pollStopped) schedulePoll(0)
+  })
+  // 止まっていたらクリックで再開、生きていれば今すぐ1回
+  $('#sync-status').addEventListener('click', () => { if (pollStopped) startPolling(); schedulePoll(0) })
   $('#btn-clear-feed').addEventListener('click', () => { $('#inbox-feed').innerHTML = '' })
   setupSplitter()
   setupZoom()

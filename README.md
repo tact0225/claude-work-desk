@@ -1,6 +1,6 @@
 # claude-work Desk
 
-[日本語README](README.ja.md)
+[日本語README](README.ja.md) ・ [Changelog](CHANGELOG.md)
 
 **A file-handoff desk between your WSL-based Claude Code workspace and the Windows desktop.**
 
@@ -122,6 +122,8 @@ fixing one means editing a single file — see [Languages](#languages).*
 ## Everything else
 
 - **Tree view** of your whole workspace, lazy-loaded so a large repo still opens instantly
+- **Auto-refresh**: the tree and the open preview are re-checked every 2 seconds, so what your agent writes shows up on its own. Rows are inserted and removed in place — the scroll position, the selected row, and the expanded folders never jump. A preview that changed on disk is re-read *and keeps its scroll position*; if you are in write mode your buffer is left untouched and the title says the file changed. Polling pauses while the window is minimized, and the sidebar footer shows the time of the last check (it reads "Waiting" until the workspace is reachable, and turns red and explains itself if polling ever stops — click it to refresh now or restart)
+- **New arrivals**: right-click a folder → **Show new arrivals**. Files that appear there afterwards stay highlighted until you click them — no fading after a few seconds — and the folder row is marked too, so you notice while it is collapsed. Watching is per folder and covers its **direct children only** (a subfolder is its own opt-in), the unread set survives a restart, and the workspace root cannot be watched (everything glowing means nothing glowing)
 - **Path bar**: `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that one file
 - **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links; search directories come from `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they double as a list of pages you haven't written yet
 - **Undo/Redo** (`↶` `↷`) appear only in write mode. They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** — the editor element is never rebuilt on save
@@ -210,7 +212,7 @@ clipper is not a combination that works.
 ## Known limitations
 
 - Must run as a native Windows app (drag & drop from Explorer doesn't reach WSLg windows)
-- File changes inside WSL are not auto-detected (the 9P protocol has no change notification) — refresh with F5
+- WSL carries no change notification (`fs.watch` over `\\wsl.localhost\` fails outright), so freshness comes from **polling every 2 seconds**, not from the OS. Changes appear within a couple of seconds rather than instantly, and the interval stretches itself if a scan ever gets slow. `F5` still forces a full refresh
 - Dragging out of the tree always **copies** (never moves)
 - Source comments are written in Japanese (the UI itself is fully translated)
 - Write mode is a plain textarea (no highlighting, completion, or diff while editing). Undo/Redo ride the browser's edit history, so **leaving write mode or switching files resets it**. It's meant for **quick one-line fixes**, not long-form writing or code editing. Saving overwrites in place with no backup, so use it on folders under version control

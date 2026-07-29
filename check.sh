@@ -35,7 +35,11 @@ node check-i18n.js || fail "i18n 辞書／キーの不整合"
 # 4) ドロップ先フォルダの検証（ワークスペース外への脱出を弾けているか）
 node test-inbox.js || fail "ドロップ先の検証ロジックが緩い"
 
-# 5) renderer が呼ぶ api.* が preload で公開されているか
+# 5) 自動更新（ポーリング）と新着ウォッチ
+#    壊れ方が静か（無言で光らない／全部光る／全消し再描画に戻る）で気づけないので毎回回す
+node test-watch.js || fail "自動更新／新着ウォッチのロジックが壊れている"
+
+# 6) renderer が呼ぶ api.* が preload で公開されているか
 #    （公開し忘れは実行時まで分からず「押しても何も起きない」になる）
 MISSING_API=""
 for m in $(grep -oP 'api\.\K\w+' renderer/app.js | sort -u); do

@@ -13,6 +13,9 @@
     "venv",
     ".claude"
   ],
+  "watchDirs": [
+    "_outbox"
+  ],
   "wikilinkDirs": [
     "",
     "notes",

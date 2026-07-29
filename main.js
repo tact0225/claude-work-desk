@@ -19,6 +19,11 @@ const DEFAULTS = {
   // ⚠ ここも config.json も「汎用の初期値」に留める。自分のフォルダ構成を焼き込むと
   //    他人の環境で意味不明な既定になる。個人の追加は userData/user-config.json 側へ。
   wikilinkDirs: ['', 'notes', 'docs', 'wiki', 'wiki/sources', 'wiki/concepts'],
+  // 「新着を表示」でウォッチするフォルダ。相対はワークスペース基準で解決する
+  // ＝既定の '_outbox' が他人の環境でもその人の _outbox を指す。
+  watchDirs: ['_outbox'],
+  // 未読ファイルの集合（設定ではなく状態だが、再起動をまたいで残す仕様なので同じ入れ物に置く）
+  unread: [],
 }
 let config = { ...DEFAULTS }
 
@@ -263,7 +268,7 @@ ipcMain.handle('choose-root', async () => {
   return config.root
 })
 
-ipcMain.handle('read-dir', async (_e, dirPath) => {
+async function readDirEntries(dirPath) {
   const entries = await fsp.readdir(dirPath, { withFileTypes: true })
   const out = entries.map(en => ({
     name: en.name,
@@ -272,12 +277,16 @@ ipcMain.handle('read-dir', async (_e, dirPath) => {
   }))
   out.sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name, i18n.getLang()))
   return out
-})
+}
+
+ipcMain.handle('read-dir', (_e, dirPath) => readDirEntries(dirPath))
 
 ipcMain.handle('read-file', async (_e, filePath) => {
   const ext = path.extname(filePath).toLowerCase()
   const stat = await fsp.stat(filePath)
-  const base = { name: path.basename(filePath), path: filePath, size: stat.size }
+  // mtimeMs はプレビューの自動更新用。ここで返しておかないと renderer が
+  // 「今出している版はいつのものか」を持てず、外部更新の検知が1周ぶん遅れる。
+  const base = { name: path.basename(filePath), path: filePath, size: stat.size, mtimeMs: stat.mtimeMs }
 
   if (IMG_EXT.includes(ext)) return { ...base, kind: 'image', url: pathToFileURL(filePath).href }
   if (ext === '.pdf') return { ...base, kind: 'pdf', url: pathToFileURL(filePath).href }
@@ -315,6 +324,251 @@ ipcMain.handle('write-file', async (_e, filePath, content) => {
   } catch (err) {
     return { ok: false, error: err.message }
   }
+})
+
+// ---------- 自動更新（ポーリング）と新着ウォッチ ----------
+//
+// ⚠ WSL越し（\\wsl.localhost\...）では fs.watch が EISDIR で即死ぬ＝OSの変更通知は使えない。
+//    ポーリングが唯一の生命線なので、失敗を握り潰さず renderer に返して画面に出す（腐り検知）。
+// fs を触るのは全部こちら側。renderer は「どこを見るか」と「次はいつ見るか」だけを持つ。
+
+const WATCH_MAX_ENTRIES = 1000 // 直下のファイル数の上限。非再帰なので実際にはまず発火しない保険
+
+// パス比較用の正規化。Windows 前提（大小同一・区切りは \ に寄せる）。
+function pathKey(p) {
+  const s = String(p || '')
+  if (!s) return ''
+  return path.resolve(s).replace(/[\\/]+$/, '').toLowerCase()
+}
+
+// 相対指定はワークスペース基準（既定の '_outbox' がその人の _outbox を指すように）
+function resolveWatchDir(s) {
+  const raw = String(s || '').trim()
+  if (!raw) return null
+  if (path.isAbsolute(raw)) return raw
+  return config.root ? path.join(config.root, raw) : null
+}
+
+// ワークスペース全体は新着ウォッチに指定させない（本田さん明示）。
+// 全部が光ると未読という印そのものが意味を失うため。設定ファイルに手で書かれていても無視する。
+function isTooBroad(dir) {
+  if (!dir) return true
+  // ⚠ ワークスペース未設定なら全部断る。ここを false で通すと root 未設定の局面だけ
+  //    C:\ でもウォッチに入る（QA指摘）。画面はルートピッカーで止まっていて踏みにくいが、
+  //    「root が無い間は判定材料も無い＝許可しない」が安全側で筋も通る
+  if (!config.root) return true
+  const d = pathKey(dir)
+  const r = pathKey(config.root)
+  return d === r || r.startsWith(d + path.sep) // root 自身と、root を含む祖先
+}
+
+// user-config.json へ書く形。root 配下なら相対に戻す。
+// ⚠ 解決後の絶対パスをそのまま焼くと、どこか1つトグルしただけで config.json の既定
+//    "watchDirs": ["_outbox"]（＝他人の環境でもその人の _outbox を指す設計）が絶対パスに
+//    置き換わり、ワークスペースを引っ越した時に既定のウォッチが黙って外れる（QA指摘）。
+function storeWatchDir(abs) {
+  if (!config.root) return abs
+  const rel = path.relative(config.root, abs)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return abs
+  return rel.split(path.sep).join('/')
+}
+
+function watchDirList() {
+  const out = []
+  for (const s of (Array.isArray(config.watchDirs) ? config.watchDirs : [])) {
+    const abs = resolveWatchDir(s)
+    if (!abs || isTooBroad(abs)) continue
+    if (!out.some(p => pathKey(p) === pathKey(abs))) out.push(abs)
+  }
+  return out
+}
+
+// 直下のファイルだけ（非再帰・本田さん明示）。todo/ は見たいが todo/done/ は見たくない、
+// という使い分けが実際にあるため、サブフォルダの中は絶対に辿らない。
+// 見たくなったらそのサブフォルダを個別にウォッチONにする運用。
+function filesDirectlyIn(entries) {
+  const out = new Set()
+  for (const en of entries) {
+    if (en.isDir) continue
+    if (config.hidden.includes(en.name)) continue
+    out.add(en.path)
+  }
+  return out
+}
+
+// baseline = 直近のスキャンで見えていた直下ファイル集合（ウォッチフォルダごと）。
+// 1回目は baseline を埋めるだけで未読にしない＝起動直後・ウォッチON直後に全画面が光らない。
+const watchBaseline = new Map()
+let unread = new Set()
+let unreadSaveTimer = null
+
+function isDirectlyUnder(file, dir) {
+  return pathKey(path.dirname(file)) === pathKey(dir)
+}
+
+// 「読めない」と「本当に消えた」を区別する。親フォルダが読めて自分だけ居ないなら削除確定。
+// ⚠ 読めない＝消えた、で処理してはいけない。WSLが落ちている朝は全ウォッチフォルダが
+//    読めなくなり、未読（クリックするまで残す約束のもの）が丸ごと飛ぶ。親も読めない時は
+//    マウントごと落ちていると見て何も触らない。追加の readdir はエラー時だけ走る。
+async function isReallyGone(dir) {
+  const parent = path.dirname(dir)
+  if (!parent || pathKey(parent) === pathKey(dir)) return false
+  try {
+    const entries = await readDirEntries(parent)
+    return !entries.some(en => pathKey(en.path) === pathKey(dir))
+  } catch (err) { return false }
+}
+
+// 未読集合が永久に太らないための掃除。ウォッチを外したフォルダのぶんは捨てる
+// （消えたファイルのぶんはスキャン時に落とす）。
+function pruneUnread(dirs) {
+  let changed = false
+  for (const p of [...unread]) {
+    if (!dirs.some(d => isDirectlyUnder(p, d))) { unread.delete(p); changed = true }
+  }
+  return changed
+}
+
+// 毎tick書くと user-config.json を叩き続けるので、変化した時だけ・少し遅らせて書く
+// ⚠ ただの debounce にしない。1.2秒より短い間隔で新着が出続けると書き込みが後ろへ
+//    ずれ続けて一度も書かれず、強制終了でその間の未読が丸ごと消える（QA指摘）。
+//    最初に汚れてから UNREAD_SAVE_MAX_MS 経ったら、debounce を待たずに必ず書く。
+const UNREAD_SAVE_MAX_MS = 5000
+let unreadDirtySince = 0
+
+function persistUnread() {
+  const now = Date.now()
+  if (!unreadDirtySince) unreadDirtySince = now
+  if (now - unreadDirtySince >= UNREAD_SAVE_MAX_MS) { flushUnread(); return }
+  clearTimeout(unreadSaveTimer)
+  unreadSaveTimer = setTimeout(flushUnread, 1200)
+}
+
+function flushUnread() {
+  clearTimeout(unreadSaveTimer)
+  unreadSaveTimer = null
+  unreadDirtySince = 0
+  try { saveUserConfig({ unread: [...unread] }) } catch (err) { console.warn('[watch] 未読の保存に失敗:', err.message) }
+}
+
+// ⚠ キー名を dirs にしない。poll-fs の返り値（ツリー用の readdir 結果 = dirs）に
+//    Object.assign で混ぜるので、同じ名前だとツリーの中身を丸ごと潰す（テストで検出）。
+function watchPayload(dirs) {
+  const counts = {}
+  for (const d of dirs) counts[d] = [...unread].filter(p => isDirectlyUnder(p, d)).length
+  return { watchDirs: dirs, unread: [...unread], counts }
+}
+
+// renderer から2秒ごとに1回だけ呼ばれる入口。
+// (a) 展開中フォルダの readdir（ツリーの差分適用用）と (b) ウォッチフォルダの readdir（新着判定）を
+// まとめて済ませる。同じフォルダが両方に出てきても readdir は1回にする。
+ipcMain.handle('poll-fs', async (_e, req) => {
+  const startedAt = Date.now()
+  const treeDirs = (req && Array.isArray(req.dirs)) ? req.dirs : []
+  const wDirs = watchDirList()
+  const results = new Map() // pathKey → { entries } | { error }
+
+  for (const d of [...treeDirs, ...wDirs]) {
+    const key = pathKey(d)
+    if (results.has(key)) continue
+    try { results.set(key, { entries: await readDirEntries(d) }) }
+    catch (err) { results.set(key, { error: err.code || err.message }) }
+  }
+
+  const out = { dirs: {}, unread: [], counts: {}, preview: null, ms: 0 }
+  // ⚠ renderer が渡してきた文字列そのものをキーに返す。こちらで正規化した形で返すと
+  //    renderer 側のフォルダ対応表と突き合わなくなる（差分が当たらず無言で止まって見える）。
+  for (const d of treeDirs) out.dirs[d] = results.get(pathKey(d))
+
+  let changed = pruneUnread(wDirs)
+  for (const d of wDirs) {
+    const r = results.get(pathKey(d))
+    // ⚠ 読めなかった tick は baseline も未読も触らない。WSLが一瞬落ちた時に
+    //    「全部消えた → 全部新規」と誤認して全画面が光るのを防ぐ（実際に起こりうる）。
+    //    例外はフォルダごと本当に消えた時だけ。放っておくと配下の未読が二度と落ちず
+    //    user-config.json に溜まり続ける（仕様: 集合が永久に太らないように）。
+    if (!r || r.error) {
+      if (await isReallyGone(d)) {
+        watchBaseline.delete(pathKey(d))
+        for (const p of [...unread]) if (isDirectlyUnder(p, d)) { unread.delete(p); changed = true }
+      }
+      continue
+    }
+    const seen = filesDirectlyIn(r.entries)
+    const base = watchBaseline.get(pathKey(d))
+    if (!base) {
+      watchBaseline.set(pathKey(d), seen) // 1回目は既読として飲み込む
+    } else {
+      for (const p of seen) if (!base.has(p) && !unread.has(p)) { unread.add(p); changed = true }
+      watchBaseline.set(pathKey(d), seen)
+    }
+    for (const p of [...unread]) {
+      if (isDirectlyUnder(p, d) && !seen.has(p)) { unread.delete(p); changed = true }
+    }
+  }
+  if (changed) persistUnread()
+  Object.assign(out, watchPayload(wDirs))
+
+  if (req && req.previewPath) {
+    try {
+      const st = await fsp.stat(req.previewPath)
+      out.preview = { mtimeMs: st.mtimeMs, size: st.size }
+    } catch (err) { out.preview = { gone: true } }
+  }
+  out.ms = Date.now() - startedAt
+  return out
+})
+
+ipcMain.handle('get-watch', () => watchPayload(watchDirList()))
+
+// 指定していいフォルダかを実測で確かめる。名前でなく中身で弾く。
+ipcMain.handle('probe-watch', async (_e, dir, browseRoot) => {
+  if (!dir || isTooBroad(dir)) return { ok: false, reason: 'root' }
+  if (browseRoot && pathKey(dir) === pathKey(browseRoot)) return { ok: false, reason: 'root' }
+  const startedAt = Date.now()
+  let entries
+  try { entries = await readDirEntries(dir) } catch (err) { return { ok: false, reason: 'read', error: err.message } }
+  const files = filesDirectlyIn(entries).size
+  const ms = Date.now() - startedAt
+  if (files > WATCH_MAX_ENTRIES) return { ok: false, reason: 'big', files, ms }
+  return { ok: true, files, ms }
+})
+
+ipcMain.handle('set-watch', async (_e, dir, on) => {
+  const next = watchDirList().filter(p => pathKey(p) !== pathKey(dir))
+  let allow = !!(on && dir && !isTooBroad(dir))
+  // ⚠ 直下1000超の上限を probe-watch 側だけに置かない。UIは必ず probe → set の順に呼ぶので
+  //    画面からは踏めないが、set-watch を直に叩けば上限を素通りできる＝ルート指定
+  //    （isTooBroad）だけが二重に守られている非対称な状態になる（QA指摘）。歯止めは入口の
+  //    数だけ要る。読めないフォルダはここでは弾かない（次のtickが baseline を張る）。
+  if (allow) {
+    try { if (filesDirectlyIn(await readDirEntries(dir)).size > WATCH_MAX_ENTRIES) allow = false }
+    catch (err) { /* 読めないだけなら通す */ }
+  }
+  if (allow) next.push(dir)
+  // 保存は相対に戻した形で（storeWatchDir のコメント参照）。解決に使う config.watchDirs も
+  // 同じ形にして、メモリ上と user-config.json が食い違わないようにする
+  const stored = next.map(storeWatchDir)
+  config.watchDirs = stored
+  try { saveUserConfig({ watchDirs: stored }) } catch (err) { console.warn('[watch] 設定の保存に失敗:', err.message) }
+
+  if (allow) {
+    // ONにした瞬間に既存ファイルを既読として記録する。やらないと初回のポーリングで
+    // 中身が丸ごと新着になり、全画面が光る。
+    try { watchBaseline.set(pathKey(dir), filesDirectlyIn(await readDirEntries(dir))) } catch (err) { /* 次のtickが baseline を張る */ }
+  } else {
+    watchBaseline.delete(pathKey(dir))
+  }
+  if (pruneUnread(next)) persistUnread() // 外したフォルダの未読は残さない（消しても光り続ける、を防ぐ）
+  return watchPayload(next)
+})
+
+// プレビューに出した＝読んだ、とみなして未読を落とす
+ipcMain.handle('mark-read', (_e, filePath) => {
+  let changed = false
+  for (const p of [...unread]) if (pathKey(p) === pathKey(filePath)) { unread.delete(p); changed = true }
+  if (changed) persistUnread()
+  return watchPayload(watchDirList())
 })
 
 async function appendDropLog(entries) {
@@ -431,8 +685,15 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadConfig()
+  // 未読は再起動をまたいで残す（本田さん選択）。ウォッチしていないフォルダのぶんは
+  // ここで捨てる＝設定を変えた後も古い未読が居座らない。
+  unread = new Set((Array.isArray(config.unread) ? config.unread : []).filter(p => typeof p === 'string'))
+  pruneUnread(watchDirList())
   applyLang()
   i18n.checkMissing((m) => console.warn(m)) // 腐り検知: 翻訳漏れは起動ログに出す
   createWindow()
 })
-app.on('window-all-closed', () => app.quit())
+app.on('window-all-closed', () => {
+  flushUnread() // 遅延書き込みの取りこぼしを防ぐ（直前にクリックした既読が消える）
+  app.quit()
+})

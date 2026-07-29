@@ -9,6 +9,8 @@
   --muted: #8a93a2;
   --accent: #4da3ff;
   --accent-dim: rgba(77, 163, 255, 0.14);
+  /* 新着（未読）。選択・リンクの青とぶつからない色にして「増えた」だけを拾えるようにする */
+  --new: #ffc76a;
   --mono: Consolas, "Cascadia Mono", "BIZ UDGothic", monospace;
   --font-ui: "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
 }
@@ -118,9 +120,21 @@ body.resizing #preview-body { pointer-events: none; }
 #btn-clear-feed { margin-left: 4px; font-size: 11px; }
 #tree { flex: 1; overflow: auto; padding: 4px 0; }
 #sidebar-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 6px 10px; color: var(--muted); font-size: 11px;
   border-top: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden;
 }
+/* 自動更新が生きているかの窓口（最終確認時刻／止まったら赤）。腐り検知はここで目に入る */
+#sync-status {
+  flex-shrink: 0; cursor: pointer; font-family: var(--mono); font-size: 10px;
+  color: #6b7482;
+}
+#sync-status:hover { color: var(--fg); }
+#sync-status.bad { color: #ff8f8f; font-family: var(--font-ui); }
+/* 空回り中（ワークスペースに届いていない）。赤ではないが通常色でもない＝時計が凍っていても
+   「動いているつもり」に見えないようにする */
+#sync-status.idle { color: #c9a25e; font-family: var(--font-ui); }
 
 .row {
   display: flex; align-items: center; gap: 5px;
@@ -132,6 +146,11 @@ body.resizing #preview-body { pointer-events: none; }
 .arrow { width: 12px; color: var(--muted); flex-shrink: 0; font-size: 10px; }
 .ficon { flex-shrink: 0; font-size: 12px; }
 .fname { overflow: hidden; text-overflow: ellipsis; }
+/* 新着（未読）。数秒でフェードさせず、クリックして開くまでずっと残す */
+.row.unread .fname { color: var(--new); font-weight: 600; }
+.row.unread { background: rgba(255, 199, 106, 0.08); }
+.badge { flex-shrink: 0; margin-left: auto; padding-left: 6px; font-size: 9px; color: var(--muted); }
+.badge.new { color: var(--new); font-size: 10px; }
 .loading { color: var(--muted); padding: 4px 12px; }
 
 /* ---------- メイン ---------- */
@@ -146,6 +165,8 @@ body.resizing #preview-body { pointer-events: none; }
 }
 #preview-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 #preview-title.editing { color: var(--accent); }
+/* 入力モード中に外部で書き換わった時。上書きしていないことが色でも分かるようにする */
+#preview-title.external { color: var(--new); }
 #preview-actions { display: flex; gap: 6px; flex-shrink: 0; }
 #preview-actions button {
   background: none; border: 1px solid var(--border); color: var(--fg);
@@ -311,6 +332,9 @@ body.resizing #preview-body { pointer-events: none; }
 #ctxmenu.show { display: block; }
 .ctxitem { padding: 6px 16px; cursor: pointer; }
 .ctxitem:hover { background: var(--accent-dim); }
+/* 指定できない項目（ワークスペース全体など）。隠さず理由を title で読ませる */
+.ctxitem.disabled { color: #5d6673; cursor: not-allowed; }
+.ctxitem.disabled:hover { background: none; }
 
 /* 設定パネル */
 #settings-overlay {
