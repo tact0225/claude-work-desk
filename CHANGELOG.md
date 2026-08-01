@@ -30,7 +30,7 @@
 ### macOS support
 
 - One script: `bash setup_mac.sh` runs the self-check, installs dependencies, and drops a "claude-work Desk.command" launcher on your desktop — double-click it from then on. Re-running is idempotent, and running it anywhere but macOS stops immediately.
-- **Nothing is deployed anywhere, unlike the Windows path.** `sync_to_windows.sh` copies into `%LOCALAPPDATA%` because WSL and Windows are separate filesystems; on macOS the clone *is* the runtime, so **`git pull` alone updates the app**.
+- **No deploy-copy step on macOS, unlike the Windows path** (the Mac version ships all the same). `sync_to_windows.sh` copies into `%LOCALAPPDATA%` because WSL and Windows are separate filesystems; on macOS the clone *is* the runtime, so **`git pull` alone updates the app**.
 - Default fonts now resolve through a **fallback chain instead of an OS branch** — Windows names first, macOS names after, and whatever isn't installed is skipped naturally. The UI chain reaches `-apple-system` and Hiragino, the monospace chain reaches `SF Mono` and `Menlo`. Mac fonts were added to the font pickers too.
 - The "Default" font labels no longer name OS-specific fonts (Segoe UI / Consolas) in any of the 8 languages. The OS decides what the default resolves to, so naming one was simply wrong on the other platform.
 - Zoom (`Ctrl/Cmd`+wheel, `+` / `-` / `0`) now responds to **Cmd** as well — matching Save and Paste, which already did.
