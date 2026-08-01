@@ -2,9 +2,13 @@
 
 [日本語README](README.ja.md) ・ [Changelog](CHANGELOG.md)
 
-**A file-handoff desk between your Claude Code workspace and your desktop. Runs on Windows (WSL) and macOS.**
+**A file-handoff desk between your Claude Code workspace and your desktop. If you run Claude Code in a terminal — on plain Windows, macOS, or WSL — this is for you.**
 
-If you run Claude Code (CLI) inside WSL, moving files between Windows and your workspace is a constant papercut: Explorer over `\\wsl.localhost\` is slow, Obsidian only shows Markdown, VS Code renders Markdown poorly. This app is a single window that fills that gap — it makes working with Claude Code feel like **tossing files into a chat**.
+Coming to terminal Claude Code from claude.ai or the desktop app, the first thing you miss is this: **you can't drag-and-drop anything into the chat anymore.** PDFs, spreadsheets, screenshots — on the web you just dropped them onto the window. A terminal has no drop target (pasting images works; attaching files does not).
+
+This app gives that back, as a single window: **drop anything onto it → it lands in `_inbox/` inside your workspace → tell Claude "check _inbox"**. Working with Claude Code feels like tossing files into a chat again.
+
+The other half is every frustration I had browsing my workspace in Obsidian: it opens nothing but Markdown (no code files, no docx), shows no line numbers so you can't tell Claude "line 120 looks wrong", and **you can't drag a file out to another app** (stock Obsidian hands over an `obsidian://` link instead of the file; getting the real file out takes a plugin). Here, Markdown renders, code gets highlighted with line numbers, PDFs/docx/images preview, and the tree drags real files out to any app with **plain OS drag-and-drop**.
 
 ## Install
 
@@ -157,6 +161,23 @@ edits asks first.*
 *English, 日本語, 简体中文, 한국어, Español, Português (BR), Deutsch, Français.
 The first launch follows your system locale and falls back to English. Adding or
 fixing one means editing a single file — see [Languages](#languages).*
+
+## One habit worth setting up: give Claude an `_outbox/`
+
+The drop window covers *your* half of the handoff. For Claude's half, make one
+folder in your workspace where Claude puts things meant for you — and Desk watches
+`_outbox/` for that **out of the box**: any new file there gets a light in the tree
+that stays until you click it. You stop asking "did it finish? where did it write that?"
+
+All it takes is one line in your project's `CLAUDE.md`:
+
+```
+Save deliverables meant for me (reports, exports, drafts) to _outbox/.
+```
+
+The names mirror each other from the workspace's point of view: `_inbox/` is what
+comes *in* (you → Claude), `_outbox/` is what goes *out* (Claude → you). Any other
+folder can be watched the same way — right-click it in the tree → **Show new arrivals**.
 
 ## Everything else
 
