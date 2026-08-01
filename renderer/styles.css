@@ -11,8 +11,11 @@
   --accent-dim: rgba(77, 163, 255, 0.14);
   /* 新着（未読）。選択・リンクの青とぶつからない色にして「増えた」だけを拾えるようにする */
   --new: #ffc76a;
-  --mono: Consolas, "Cascadia Mono", "BIZ UDGothic", monospace;
-  --font-ui: "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
+  /* 既定フォント。OSで分岐せずフォールバックチェーンで解決する＝Windows→macOS の順に並べ、
+     その環境に無いものは自然に飛ばされる（renderer に process.platform を持ち込まない）。
+     ⚠️ app.js の FALLBACK_UI / FALLBACK_MONO と同じ文字列＝片方だけ直すとズレる（check.sh が見る） */
+  --mono: Consolas, "Cascadia Mono", "BIZ UDGothic", "SF Mono", Menlo, monospace;
+  --font-ui: "Segoe UI", "Yu Gothic UI", Meiryo, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
 }
 
 body {
@@ -72,6 +75,11 @@ body {
 .hist-item:hover { background: var(--accent-dim); }
 .hist-item.current { color: var(--accent); }
 .hist-empty { padding: 6px 12px; color: var(--muted); font-size: 12px; }
+.hist-head {
+  padding: 5px 12px 2px; color: var(--muted); font-size: 11px;
+  border-top: 1px solid var(--border); margin-top: 4px;
+}
+.hist-head:first-child { border-top: none; margin-top: 0; }
 .hist-clear {
   padding: 5px 12px; cursor: pointer; color: var(--muted); font-size: 12px;
   border-top: 1px solid var(--border); margin-top: 4px;

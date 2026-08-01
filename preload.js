@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   readFile: (p) => ipcRenderer.invoke('read-file', p),
   writeFile: (p, content) => ipcRenderer.invoke('write-file', p, content),
   resolveTarget: (input) => ipcRenderer.invoke('resolve-target', input),
+  listWorktrees: () => ipcRenderer.invoke('list-worktrees'),
   pollFs: (req) => ipcRenderer.invoke('poll-fs', req),
   getWatch: () => ipcRenderer.invoke('get-watch'),
   probeWatch: (dir, browseRoot) => ipcRenderer.invoke('probe-watch', dir, browseRoot),

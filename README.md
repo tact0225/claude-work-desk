@@ -2,13 +2,15 @@
 
 [日本語README](README.ja.md) ・ [Changelog](CHANGELOG.md)
 
-**A file-handoff desk between your WSL-based Claude Code workspace and the Windows desktop.**
+**A file-handoff desk between your Claude Code workspace and your desktop. Runs on Windows (WSL) and macOS.**
 
 If you run Claude Code (CLI) inside WSL, moving files between Windows and your workspace is a constant papercut: Explorer over `\\wsl.localhost\` is slow, Obsidian only shows Markdown, VS Code renders Markdown poorly. This app is a single window that fills that gap — it makes working with Claude Code feel like **tossing files into a chat**.
 
 ## Install
 
-**There is no installer to download.** Run this in a WSL terminal and you are done:
+**There is no installer to download.** One command in a terminal and you are done.
+
+**Windows (WSL)** — from a WSL terminal:
 
 ```bash
 git clone https://github.com/tact0225/claude-work-desk.git
@@ -18,7 +20,20 @@ bash sync_to_windows.sh
 
 That one script copies the app to `%LOCALAPPDATA%\claude-work-desk`, installs its
 dependencies, and puts a shortcut on your desktop. To update later: `git pull` and run
-it again — your settings survive. Prerequisites and the longer version: [Setup](#setup).
+it again — your settings survive.
+
+**macOS** — from a terminal:
+
+```bash
+git clone https://github.com/tact0225/claude-work-desk.git
+cd claude-work-desk
+bash setup_mac.sh
+```
+
+That runs the self-check, installs dependencies, and puts a "claude-work Desk.command"
+launcher on your desktop — double-click it from then on. To update later: just `git pull`.
+
+Prerequisites and the longer version: [Setup](#setup).
 
 ![The workspace tree on the left, a rendered Markdown note on the right, and the _inbox panel below the tree](docs/images/hero.png)
 
@@ -73,7 +88,7 @@ just wrote without opening an editor.*
 ![A file being dragged over the window, with a dashed drop zone reading Drop into _inbox](docs/images/drop-overlay.png)
 
 *Drag a file anywhere onto the window — there is no target to aim for, the whole
-window is the target. `Ctrl+V` works too: files, screenshots (saved as `.png`), or
+window is the target. `Ctrl/Cmd+V` works too: files, screenshots (saved as `.png`), or
 plain text (saved as `.md`).*
 
 ### A receipt, not a guess
@@ -126,19 +141,28 @@ fixing one means editing a single file — see [Languages](#languages).*
 - **New arrivals**: right-click a folder → **Show new arrivals**. Files that appear there afterwards stay highlighted until you click them — no fading after a few seconds — and the folder row is marked too, so you notice while it is collapsed. Watching is per folder and covers its **direct children only** (a subfolder is its own opt-in), the unread set survives a restart, and the workspace root cannot be watched (everything glowing means nothing glowing)
 - **Path bar**: `▾` opens an Explorer-style history (last 20), `⌂` returns to the workspace, `↑` goes up one level. Paste a *file* path and it opens the parent folder and previews that one file
 - **Wikilinks**: `[[page-name]]` resolves to a clickable link (`←` / Alt+← to go back). Targets are matched by *name*, not path, so moving files doesn't break links; search directories come from `wikilinkDirs` in `config.json`. Unresolved links render greyed out rather than disappearing — they double as a list of pages you haven't written yet
-- **Undo/Redo** (`↶` `↷`) appear only in write mode. They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl+Z`/`Ctrl+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** — the editor element is never rebuilt on save
+- **Undo/Redo** (`↶` `↷`) appear only in write mode. They drive Chromium's own edit history rather than a parallel stack, so the buttons and `Ctrl/Cmd+Z`/`Ctrl/Cmd+Shift+Z` share one history and an IME composition undoes as a single step. **The history survives saving** — the editor element is never rebuilt on save
 - **Drag out**: drag any file from the tree straight into Explorer or a chat app (always a copy, never a move)
 - **More preview types**: `.docx`, images, PDF — plus draggable table column widths
 - **Pick your own drop folder**: `_inbox` is only the default. Set any folder under ⚙ — it is created if missing. It must stay *inside* the workspace, and that is not a formality: it is what stops a dropped file from landing in a worktree lane you were only peeking at. Symlinks and junctions pointing out of the workspace are rejected, and the check runs again at drop time, not only when you set it
-- **Display settings**: font size (Ctrl+wheel), UI/monospace font pickers, draggable sidebar width — all persisted
+- **Display settings**: font size (Ctrl/Cmd+wheel or Ctrl/Cmd +/-), UI/monospace font pickers, draggable sidebar width — all persisted
 
 ## Requirements
+
+**Windows (WSL)**
 
 - Windows 10/11 + WSL2
 - Node.js LTS on the Windows side — https://nodejs.org
 - rsync inside WSL (usually preinstalled)
 
+**macOS**
+
+- macOS 11 (Big Sur) or later — Apple Silicon or Intel
+- Node.js LTS — https://nodejs.org (or `brew install node`)
+
 ## Setup
+
+### Windows (WSL)
 
 From a WSL terminal:
 
@@ -151,6 +175,25 @@ bash sync_to_windows.sh
 This deploys to `%LOCALAPPDATA%\claude-work-desk`, installs dependencies, and creates a desktop shortcut. On first launch, pick your workspace folder (WSL folders are under "Linux" in the dialog sidebar).
 
 To update: `git pull` then re-run `bash sync_to_windows.sh`. Your settings survive redeployment.
+
+### macOS
+
+From a terminal:
+
+```bash
+git clone https://github.com/tact0225/claude-work-desk.git
+cd claude-work-desk
+bash setup_mac.sh
+```
+
+One script: `check.sh` (self-check) → `npm install` → a "claude-work Desk.command"
+launcher on your desktop. Double-click it to start the app, and pick your workspace
+folder on first launch. Re-running the script is idempotent.
+
+**Unlike the Windows path, nothing is deployed anywhere.** `sync_to_windows.sh` copies
+into `%LOCALAPPDATA%` because WSL and Windows are separate filesystems; on macOS the
+clone *is* the runtime, so there is nowhere to copy to — **`git pull` alone updates the
+app** (re-run `bash setup_mac.sh` only when dependencies change).
 
 ## Languages
 
@@ -189,10 +232,14 @@ What changes:
 | Exact spelling | forgiving | **exact match only** |
 
 `wikilinkDirs` ships as a generic starting point — the note's own folder plus `notes`,
-`docs`, and `wiki/…`. To point it at your own layout, edit
-**`%APPDATA%\claude-work-desk\user-config.json`**, *not* the `config.json` bundled with
-the app: `sync_to_windows.sh` overwrites that one on every update, and your change would
-vanish the next time you pull.
+`docs`, and `wiki/…`. To point it at your own layout, edit the user config file:
+
+- Windows: **`%APPDATA%\claude-work-desk\user-config.json`**
+- macOS: **`~/Library/Application Support/claude-work-desk/user-config.json`**
+
+*Not* the `config.json` bundled with the app: that one is overwritten on every update
+(by `sync_to_windows.sh` on Windows, by `git pull` on macOS), so your change would
+vanish the next time you update.
 
 That last row is the one that actually bites. A link written `[[my-note]]` when the file
 is `my_note.md` silently renders grey and nobody notices. When I moved my own workspace
@@ -211,8 +258,8 @@ clipper is not a combination that works.
 
 ## Known limitations
 
-- Must run as a native Windows app (drag & drop from Explorer doesn't reach WSLg windows)
-- WSL carries no change notification (`fs.watch` over `\\wsl.localhost\` fails outright), so freshness comes from **polling every 2 seconds**, not from the OS. Changes appear within a couple of seconds rather than instantly, and the interval stretches itself if a scan ever gets slow. `F5` still forces a full refresh
+- On Windows it must run as a native Windows app (drag & drop from Explorer doesn't reach WSLg windows). On macOS it runs natively, so this does not apply
+- Freshness comes from **polling every 2 seconds**, never from the OS. WSL carries no change notification at all (`fs.watch` over `\\wsl.localhost\` fails outright), so polling is the single code path and macOS uses it too: changes appear within a couple of seconds rather than instantly, and the interval stretches itself if a scan ever gets slow. `F5` still forces a full refresh
 - Dragging out of the tree always **copies** (never moves)
 - Source comments are written in Japanese (the UI itself is fully translated)
 - Write mode is a plain textarea (no highlighting, completion, or diff while editing). Undo/Redo ride the browser's edit history, so **leaving write mode or switching files resets it**. It's meant for **quick one-line fixes**, not long-form writing or code editing. Saving overwrites in place with no backup, so use it on folders under version control

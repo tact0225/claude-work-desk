@@ -250,6 +250,38 @@ ipcMain.handle('resolve-target', async (_e, input) => {
   }
 })
 
+// ワークスペースの隣にある worktree レーンを検出する（パス欄の履歴▾に出す用）。
+// レーンは「<ルート名>-<slug>」でルートの隣に作られる規約（例: claude-work-aeo-rewrite）。
+// git を呼ばずに見分ける: linked worktree は .git が「gitdir: .../.git/worktrees/<slug>」を
+// 書いた**ファイル**（普通のクローンは .git がフォルダ）。名前の前方一致だけだと
+// claude-work-desk のような無関係な隣人まで拾うので、この中身判定を必須にする。
+ipcMain.handle('list-worktrees', async () => {
+  const root = rootDir()
+  if (!root || !fs.existsSync(root)) return []
+  const parent = path.dirname(root)
+  if (!parent || pathKey(parent) === pathKey(root)) return [] // ドライブ直下等で親が自分自身
+  const base = path.basename(root)
+  let entries
+  try { entries = await fsp.readdir(parent, { withFileTypes: true }) } catch (e) { return [] }
+  const out = []
+  for (const en of entries) {
+    if (!en.isDirectory()) continue
+    if (!en.name.startsWith(base + '-')) continue
+    const lanePath = path.join(parent, en.name)
+    try {
+      const gitPath = path.join(lanePath, '.git')
+      if (!(await fsp.stat(gitPath)).isFile()) continue
+      // submodule も .git ファイルを持つが、あちらは gitdir が .git/modules/ を指す。
+      // レーン（linked worktree）だけ拾いたいので worktrees/ を必須にする。
+      const head = (await fsp.readFile(gitPath, 'utf8')).slice(0, 512)
+      if (!/gitdir:.*[\\/]worktrees[\\/]/.test(head)) continue
+      out.push({ name: en.name, path: lanePath })
+    } catch (e) { /* .git が無い・読めない＝レーンではない */ }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name, i18n.getLang()))
+  return out
+})
+
 ipcMain.handle('choose-root', async () => {
   const r = await dialog.showOpenDialog({
     title: t('main.chooseTitle'),

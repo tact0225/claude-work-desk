@@ -1,7 +1,7 @@
 {
   "name": "claude-work-desk",
-  "version": "0.5.0",
-  "description": "A file-handoff desk between your WSL-based Claude Code workspace and the Windows desktop: tree, preview, and an _inbox drop window",
+  "version": "0.7.0",
+  "description": "A file-handoff desk between your Claude Code workspace and your desktop, on Windows/WSL and macOS: tree, preview, and an _inbox drop window",
   "main": "main.js",
   "scripts": {
     "start": "electron ."

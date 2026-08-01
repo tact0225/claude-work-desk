@@ -2,6 +2,41 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.7.0
+
+**Worktree lanes are now one click away in the path bar's ▾. No more digging up paths in a terminal.**
+
+### Path bar
+
+- The history dropdown (▾) now lists **worktree lanes** at the top. It picks up folders sitting **next to** your workspace named `<workspace-name>-<slug>` — but only those whose `.git` is a **file** pointing at a `worktrees/` gitdir (i.e. actual linked worktrees). A name-prefix match alone would drag in unrelated neighbors like `claude-work-desk`, so the contents are checked too. Click a lane to browse it.
+- Lanes are re-detected every time you open ▾ — retired lanes disappear on their own, new lanes show up the next time you look. No git command is invoked, so it works as-is across WSL (`\\wsl.localhost\...`).
+- With no lanes present, nothing changes — the section simply isn't there.
+
+---
+
+## v0.6.0
+
+**It runs on macOS now.**
+
+### macOS support
+
+- One script: `bash setup_mac.sh` runs the self-check, installs dependencies, and drops a "claude-work Desk.command" launcher on your desktop — double-click it from then on. Re-running is idempotent, and running it anywhere but macOS stops immediately.
+- **Nothing is deployed anywhere, unlike the Windows path.** `sync_to_windows.sh` copies into `%LOCALAPPDATA%` because WSL and Windows are separate filesystems; on macOS the clone *is* the runtime, so **`git pull` alone updates the app**.
+- Default fonts now resolve through a **fallback chain instead of an OS branch** — Windows names first, macOS names after, and whatever isn't installed is skipped naturally. The UI chain reaches `-apple-system` and Hiragino, the monospace chain reaches `SF Mono` and `Menlo`. Mac fonts were added to the font pickers too.
+- The "Default" font labels no longer name OS-specific fonts (Segoe UI / Consolas) in any of the 8 languages. The OS decides what the default resolves to, so naming one was simply wrong on the other platform.
+- Zoom (`Ctrl/Cmd`+wheel, `+` / `-` / `0`) now responds to **Cmd** as well — matching Save and Paste, which already did.
+
+### Checks
+
+- `check.sh` now **actually runs** on macOS. `grep -P` is a GNU extension that BSD grep does not have, so on a Mac those checks would have failed outright, been swallowed by `|| true`, and quietly passed as **checks that never ran**. Rewritten with POSIX `-E` only; what they detect is unchanged.
+- Added a check that the default font chains match. `:root` in `renderer/styles.css` and `FALLBACK_*` in `renderer/app.js` hold the same string twice, and the latter overwrites the former at startup — so **editing only one leaves the old chain in place until you touch the font settings**, which nobody would notice. Now it fails the build.
+
+### Docs
+
+- Both READMEs gained macOS setup instructions and per-OS paths for `user-config.json`. The "must run as a native Windows app" caveat is now split into **the WSLg drag-and-drop problem** and **the missing change notification over WSL**, so it is clear which parts do not apply to macOS.
+
+---
+
 ## v0.5.0
 
 **The tree now keeps itself up to date. You no longer press F5.**

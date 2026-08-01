@@ -202,14 +202,43 @@ function pushPathHistory(p) {
 
 function hidePathHist() { $('#path-hist').classList.remove('show') }
 
-function togglePathHist() {
+let pathHistBusy = false // レーン実測（await）中の二度押しで二重描画しないための鍵
+
+async function togglePathHist() {
   const box = $('#path-hist')
   if (box.classList.contains('show')) { hidePathHist(); return }
+  if (pathHistBusy) return
+  pathHistBusy = true
+  // worktree レーンは開くたびに実測する＝撤収済みレーンが残らない・新レーンは次に開けば出る。
+  // 検出に失敗しても履歴だけは必ず出す（レーンはおまけ、履歴が本体）。
+  let lanes = []
+  try { lanes = await api.listWorktrees() } catch (e) { /* 履歴だけ出す */ }
+  pathHistBusy = false
   const list = pathHistory()
   box.innerHTML = ''
-  if (!list.length) {
+  if (lanes.length) {
+    const head = document.createElement('div')
+    head.className = 'hist-head'
+    head.textContent = t('hist.lanes')
+    box.appendChild(head)
+    for (const ln of lanes) {
+      const it = document.createElement('div')
+      it.className = 'hist-item' + (samePath(ln.path, browseRoot) ? ' current' : '')
+      it.textContent = `🌿 ${ln.name}`
+      it.title = ln.path
+      it.addEventListener('click', () => { hidePathHist(); gotoPath(ln.path) })
+      box.appendChild(it)
+    }
+    if (list.length) {
+      const head2 = document.createElement('div')
+      head2.className = 'hist-head'
+      head2.textContent = t('hist.recent')
+      box.appendChild(head2)
+    }
+  }
+  if (!list.length && !lanes.length) {
     box.innerHTML = `<div class="hist-empty">${escapeHtml(t('hist.empty'))}</div>`
-  } else {
+  } else if (list.length) {
     for (const p of list) {
       const it = document.createElement('div')
       it.className = 'hist-item' + (samePath(p, browseRoot) ? ' current' : '')
@@ -1121,7 +1150,8 @@ function setupZoom() {
   zoom = parseFloat(localStorage.zoom || '1')
   if (zoom !== 1) api.setZoom(zoom)
   window.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey) return
+    // macOS は Cmd（metaKey）が修飾キー。トラックパッドのピンチは ctrlKey で来るので両方見る
+    if (!e.ctrlKey && !e.metaKey) return
     e.preventDefault()
     changeZoom(e.deltaY < 0 ? 0.05 : -0.05)
   }, { passive: false })
@@ -1147,8 +1177,10 @@ function setZoomTo(factor) {
 
 // ---------- フォント設定（localStorage優先、config.jsonが下地） ----------
 
-const FALLBACK_UI = '"Segoe UI", "Yu Gothic UI", Meiryo, sans-serif'
-const FALLBACK_MONO = 'Consolas, "Cascadia Mono", "BIZ UDGothic", monospace'
+// styles.css の :root と同じチェーン（applyFonts が起動時に CSS を上書きするので、
+// 片方だけ直すと「設定を触るまで旧チェーン」というズレになる。check.sh 7) が一致を見る）
+const FALLBACK_UI = '"Segoe UI", "Yu Gothic UI", Meiryo, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif'
+const FALLBACK_MONO = 'Consolas, "Cascadia Mono", "BIZ UDGothic", "SF Mono", Menlo, monospace'
 
 function applyFonts() {
   const ui = localStorage.fontUi || CONFIG.fontUi
@@ -1295,9 +1327,11 @@ function setupGlobal() {
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack() }
     if (e.key === 'Escape') { hideCtxMenu(); hidePathHist(); $('#settings-overlay').classList.remove('show') }
     if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteToInbox() }
-    if (e.ctrlKey && (e.key === '+' || e.key === '=' || e.key === ';')) { e.preventDefault(); changeZoom(0.1) }
-    if (e.ctrlKey && e.key === '-') { e.preventDefault(); changeZoom(-0.1) }
-    if (e.ctrlKey && e.key === '0') { e.preventDefault(); changeZoom(0) }
+    // ズームも Ctrl/Cmd 両対応（macOS の Cmd+ / Cmd- / Cmd+0）。上の保存・貼り付けと同じ書き方に揃える
+    const mod = e.ctrlKey || e.metaKey
+    if (mod && (e.key === '+' || e.key === '=' || e.key === ';')) { e.preventDefault(); changeZoom(0.1) }
+    if (mod && e.key === '-') { e.preventDefault(); changeZoom(-0.1) }
+    if (mod && e.key === '0') { e.preventDefault(); changeZoom(0) }
   })
   window.addEventListener('click', () => { hideCtxMenu(); hidePathHist() })
   // 入力モードで未保存のまま閉じるのを止める

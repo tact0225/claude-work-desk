@@ -33,7 +33,7 @@ echo "==> 配布: $SRC -> $DST (user=$WINUSER)"
 mkdir -p "$DST"
 rsync -a --delete \
   --exclude node_modules --exclude .git \
-  --exclude sync_to_windows.sh --exclude publish_public.sh \
+  --exclude sync_to_windows.sh --exclude publish_public.sh --exclude setup_mac.sh \
   "$SRC/" "$DST/"
 
 echo "==> npm install (初回はElectron本体DLで数分かかります)"
