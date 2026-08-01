@@ -16,10 +16,18 @@ If you run Claude Code (CLI) inside WSL, moving files between Windows and your w
   (the app is not code-signed — certificates cost money, the code is open instead):
   click **More info → Run anyway**. That's it — the app starts by itself.
 - **macOS** — download `claude-work-desk-x.y.z-mac.dmg`, open it, and drag the app
-  into **Applications**. On first launch macOS will say it "can't verify the developer"
-  (same reason — not code-signed): **right-click the app → Open → Open**. On newer
-  macOS versions, go to **System Settings → Privacy & Security → Open Anyway** instead.
-  Either way it's a one-time step.
+  into **Applications**. On first launch macOS says "**Apple could not verify
+  'claude-work Desk' is free of malware**" — and **that dialog has no Open button**
+  (the app is not code-signed; certificates cost money, the code is open instead).
+  Allow it once, like this:
+  1. Close the dialog with **Done** (do *not* click **Move to Trash**)
+  2. Open **System Settings → Privacy & Security** and scroll down
+  3. Next to the line saying "claude-work Desk" was blocked, click **Open Anyway**
+     (this entry only appears *after* a blocked launch attempt)
+  4. Confirm with your password (or Touch ID), then **Open**
+
+  It starts normally from then on. On older macOS versions,
+  **right-click the app → Open → Open** also works.
 
 On first launch, pick your workspace folder (e.g. the folder Claude Code works in) — done.
 To update, download the newer installer from Releases and run it; your settings survive.
