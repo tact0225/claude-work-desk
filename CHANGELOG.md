@@ -2,6 +2,20 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.8.0
+
+**There are installers now. No terminal required, on Windows and macOS alike.**
+
+### Distribution
+
+- [Releases](https://github.com/tact0225/claude-work-desk/releases/latest) now carries a **Windows installer (.exe)** and a **macOS disk image (.dmg, universal — Apple Silicon and Intel)**. Download, double-click, done. No git clone, no terminal.
+- Builds run on GitHub Actions per tag and attach to the Release automatically — no hand-built, hand-uploaded artifacts, so a release can't silently ship without them.
+- The binaries are not code-signed (certificates cost money; the code is open instead). First launch takes one extra step: **More info → Run anyway** on Windows SmartScreen, **right-click → Open** on macOS Gatekeeper. Documented in the README.
+- The app has an icon now (an arrow dropping into a tray — the handoff window).
+- The terminal route (`sync_to_windows.sh` / `setup_mac.sh`) still works exactly as before.
+
+---
+
 ## v0.7.1
 
 **The inbox feed panel is now resizable by dragging.**

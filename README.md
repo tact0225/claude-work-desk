@@ -8,7 +8,23 @@ If you run Claude Code (CLI) inside WSL, moving files between Windows and your w
 
 ## Install
 
-**There is no installer to download.** One command in a terminal and you are done.
+**No terminal needed.** Grab the installer for your OS from
+[**Releases**](https://github.com/tact0225/claude-work-desk/releases/latest):
+
+- **Windows** — download `claude-work-desk-setup-x.y.z.exe` and double-click it.
+  Windows SmartScreen will warn about an unknown publisher the first time
+  (the app is not code-signed — certificates cost money, the code is open instead):
+  click **More info → Run anyway**. That's it — the app starts by itself.
+- **macOS** — download `claude-work-desk-x.y.z-mac.dmg`, open it, and drag the app
+  into **Applications**. On first launch macOS will say it "can't verify the developer"
+  (same reason — not code-signed): **right-click the app → Open → Open**. On newer
+  macOS versions, go to **System Settings → Privacy & Security → Open Anyway** instead.
+  Either way it's a one-time step.
+
+On first launch, pick your workspace folder (e.g. the folder Claude Code works in) — done.
+To update, download the newer installer from Releases and run it; your settings survive.
+
+**Prefer the terminal?** Installing from source works exactly as before:
 
 **Windows (WSL)** — from a WSL terminal:
 

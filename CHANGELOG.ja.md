@@ -2,6 +2,20 @@
 
 [English version](CHANGELOG.md)
 
+## v0.8.0
+
+**インストーラができました。ターミナルなしで導入できます（Windows・macOS両方）。**
+
+### 配布
+
+- [Releases](https://github.com/tact0225/claude-work-desk/releases/latest) に **Windowsインストーラ（.exe）** と **macOSディスクイメージ（.dmg・Apple Silicon/Intel両対応のユニバーサル）** を置きました。ダウンロードしてダブルクリックするだけで入ります。git clone もターミナルも不要です。
+- ビルドは GitHub Actions がタグごとに自動で行い、Releases に添付します（手作業のビルド・アップロードはありません＝リリース漏れが起きない仕組み）。
+- コード署名はしていません（証明書が有料のため）。初回だけ Windows は SmartScreen の「詳細情報→実行」、macOS は「右クリック→開く」が必要です。手順はREADMEに書きました。
+- アプリアイコンを作りました（トレイに落ちる矢印＝受け渡し窓）。
+- 従来のターミナル導入（`sync_to_windows.sh` / `setup_mac.sh`）もそのまま使えます。
+
+---
+
 ## v0.7.1
 
 **受領フィード（_inboxの窓）の高さをドラッグで変えられます。**

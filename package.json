@@ -1,17 +1,63 @@
 {
   "name": "claude-work-desk",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "A file-handoff desk between your Claude Code workspace and your desktop, on Windows/WSL and macOS: tree, preview, and an _inbox drop window",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --publish never"
   },
   "devDependencies": {
-    "electron": "^34.0.0"
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
     "marked": "^12.0.2",
     "highlight.js": "^11.9.0",
     "mammoth": "^1.7.2"
+  },
+  "build": {
+    "appId": "com.tact0225.claude-work-desk",
+    "productName": "claude-work Desk",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "wikilink.js",
+      "config.json",
+      "renderer/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "claude-work-desk-setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "artifactName": "claude-work-desk-${version}-mac.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "tact0225",
+      "repo": "claude-work-desk",
+      "releaseType": "release"
+    }
   }
 }

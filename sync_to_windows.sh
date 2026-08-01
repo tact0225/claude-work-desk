@@ -32,7 +32,7 @@ NPM_CLI='C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
 echo "==> 配布: $SRC -> $DST (user=$WINUSER)"
 mkdir -p "$DST"
 rsync -a --delete \
-  --exclude node_modules --exclude .git \
+  --exclude node_modules --exclude .git --exclude dist --exclude .github \
   --exclude sync_to_windows.sh --exclude publish_public.sh --exclude setup_mac.sh \
   "$SRC/" "$DST/"
 

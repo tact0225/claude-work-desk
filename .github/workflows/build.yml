@@ -1,0 +1,31 @@
+# タグ push（publish_public.sh が打つ vX.Y.Z）で Windows / macOS のインストーラをビルドし、
+# その版の GitHub Release に自動添付する。ターミナルに馴染みがない人の導入経路。
+# 署名なし: Windows は SmartScreen、macOS は Gatekeeper の初回確認が出る（README に手順記載）。
+name: build-installers
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 署名証明書は持たない前提。これが無いと macOS ランナーが証明書を探しに行って失敗する
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --publish always
