@@ -133,16 +133,15 @@ bash setup_mac.sh
 
 ## 必要なもの
 
-**Windows（WSL）**
+**[Releases](https://github.com/tact0225/claude-work-desk/releases/latest) からインストールする場合**（通常はこちら）
 
-- Windows 10/11 + WSL2
-- Windows側のNode.js（LTS）— https://nodejs.org
-- WSL側のrsync（大抵入っています）
+- Windows 10/11、または macOS 11（Big Sur）以降 — Apple Silicon / Intel どちらも
+- 以上です。Node.js も WSL も不要。**アプリを使うのに WSL は要りません** — 選んだフォルダを覗くだけなので `C:\...` の普通のフォルダでそのまま動きます。WSL のパス（`\\wsl.localhost\...`）「も」動く、というだけです（作者がその構成なので）。
 
-**macOS**
+**ソースからインストールする場合**
 
-- macOS 11（Big Sur）以降 — Apple Silicon / Intel どちらも
-- Node.js（LTS）— https://nodejs.org（`brew install node`でも可）
+- Windows: Windows 10/11 + WSL2（インストールスクリプトが WSL で動くため）、Windows側のNode.js（LTS）— https://nodejs.org 、WSL側のrsync（大抵入っています）
+- macOS: Node.js（LTS）— https://nodejs.org（`brew install node`でも可）
 
 ## セットアップ
 

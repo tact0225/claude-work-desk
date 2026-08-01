@@ -173,16 +173,18 @@ fixing one means editing a single file — see [Languages](#languages).*
 
 ## Requirements
 
-**Windows (WSL)**
+**Installing from [Releases](https://github.com/tact0225/claude-work-desk/releases/latest)** (the normal way)
 
-- Windows 10/11 + WSL2
-- Node.js LTS on the Windows side — https://nodejs.org
-- rsync inside WSL (usually preinstalled)
+- Windows 10/11, or macOS 11 (Big Sur) or later — Apple Silicon or Intel
+- That's it. No Node.js, no WSL. **WSL is not required to *use* the app** — it browses
+  any folder you pick, `C:\...` included. WSL paths (`\\wsl.localhost\...`) just happen
+  to work too, because that's how the author runs it.
 
-**macOS**
+**Installing from source**
 
-- macOS 11 (Big Sur) or later — Apple Silicon or Intel
-- Node.js LTS — https://nodejs.org (or `brew install node`)
+- Windows: Windows 10/11 + WSL2 (the install script runs in WSL), Node.js LTS on the
+  Windows side — https://nodejs.org, rsync inside WSL (usually preinstalled)
+- macOS: Node.js LTS — https://nodejs.org (or `brew install node`)
 
 ## Setup
 
