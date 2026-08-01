@@ -1143,6 +1143,42 @@ function setupSplitter() {
   })
 }
 
+// _inbox 受領フィードの高さ。上端のスプリッターを縦ドラッグで変える（横のと同じ流儀）。
+function setupInboxSplitter() {
+  const inbox = $('#inbox')
+  const splitter = $('#inbox-splitter')
+  // 復元にもクランプを掛ける。大画面で高く保存→小さい窓で起動、のときに
+  // ツリー（flex:1・最小0）が潰れた状態で立ち上がるのを防ぐ（QA指摘）。
+  const saved = parseInt(localStorage.inboxHeight, 10)
+  if (saved) {
+    const maxH = Math.max(60, $('#sidebar').getBoundingClientRect().height - 160)
+    inbox.style.height = Math.min(maxH, Math.max(60, saved)) + 'px'
+  }
+  splitter.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    splitter.classList.add('dragging')
+    document.body.classList.add('resizing', 'row')
+    // ドラッグ中の基準は「掴んだ瞬間の下端」に固定する。毎moveで測り直すと
+    // 自分の高さ変更で下端がわずかに動き、カーソルと境界がズレていく。
+    const bottom = inbox.getBoundingClientRect().bottom
+    // 上限はツリーを最低限残す位置まで（サイドバー全体 − ヘッダやツリー数行ぶん）
+    const maxH = Math.max(60, $('#sidebar').getBoundingClientRect().height - 160)
+    const onMove = (ev) => {
+      const h = Math.min(maxH, Math.max(60, bottom - ev.clientY))
+      inbox.style.height = h + 'px'
+    }
+    const onUp = () => {
+      splitter.classList.remove('dragging')
+      document.body.classList.remove('resizing', 'row')
+      localStorage.inboxHeight = inbox.style.height
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  })
+}
+
 let zoom = 1
 let zoomToastTimer = null
 
@@ -1303,6 +1339,7 @@ function setupGlobal() {
   $('#sync-status').addEventListener('click', () => { if (pollStopped) startPolling(); schedulePoll(0) })
   $('#btn-clear-feed').addEventListener('click', () => { $('#inbox-feed').innerHTML = '' })
   setupSplitter()
+  setupInboxSplitter()
   setupZoom()
   setupSettings()
   // プレビュー内の選択テキストを右クリックでコピー

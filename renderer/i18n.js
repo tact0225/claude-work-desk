@@ -276,6 +276,16 @@
       de: 'Zum Anpassen der Breite ziehen',
       fr: 'Glissez pour ajuster la largeur',
     },
+    'tip.inboxSplitter': {
+      ja: 'ドラッグで高さ調整',
+      en: 'Drag to resize',
+      zh: '拖动调整高度',
+      ko: '드래그하여 높이 조절',
+      es: 'Arrastra para ajustar la altura',
+      pt: 'Arraste para ajustar a altura',
+      de: 'Zum Anpassen der Höhe ziehen',
+      fr: 'Glissez pour ajuster la hauteur',
+    },
     'tip.awayRoot': {
       ja: '{path}\n（投入先は {inbox} のまま）',
       en: '{path}\n(files still land in {inbox})',

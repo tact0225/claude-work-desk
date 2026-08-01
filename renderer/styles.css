@@ -108,6 +108,7 @@ body {
 #splitter:hover, #splitter.dragging { background: var(--accent); }
 body.resizing { user-select: none; cursor: col-resize; }
 body.resizing #preview-body { pointer-events: none; }
+body.resizing.row { cursor: row-resize; }
 #sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 10px;
@@ -285,7 +286,17 @@ body.resizing #preview-body { pointer-events: none; }
 .pdfframe { width: 100%; height: 100%; border: none; }
 
 /* ---------- インボックス（サイドバー下部） ---------- */
-/* 高さはファイル名が数行見えれば足りる（受領灯は1分で消える） */
+/* 既定の高さはファイル名が数行見えれば足りる（受領灯は1分で消える）。
+   もっと見たい時は上端のスプリッターをドラッグ（localStorage に記憶）。 */
+#inbox-splitter {
+  height: 5px; flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 0.15s;
+  /* つまみの実体は #inbox 上端の border-top(2px)。この5pxは掴みやすくする当たり判定 */
+  margin-bottom: -2px; z-index: 1;
+}
+#inbox-splitter:hover, #inbox-splitter.dragging { background: var(--accent); }
 #inbox {
   height: 95px; flex-shrink: 0;
   border-top: 2px solid var(--border);

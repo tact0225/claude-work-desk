@@ -2,6 +2,15 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.7.1
+
+**The inbox feed panel is now resizable by dragging.**
+
+- Drag the border between the tree and the inbox feed up or down to resize the panel. The size is remembered across restarts (same convention as the sidebar width).
+- Clamped to a 60px minimum and to a range that keeps the tree usable.
+
+---
+
 ## v0.7.0
 
 **Worktree lanes are now one click away in the path bar's ▾. No more digging up paths in a terminal.**
