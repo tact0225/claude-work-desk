@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('api', {
   setLang: (lang) => ipcRenderer.invoke('set-lang', lang),
   setInbox: (name) => ipcRenderer.invoke('set-inbox', name),
   chooseRoot: () => ipcRenderer.invoke('choose-root'),
+  // ⚠ chooseRoot とは別物。こちらはパスを返すだけでワークスペース（_inboxの置き場）を変えない
+  chooseFolder: (defaultPath) => ipcRenderer.invoke('choose-folder', defaultPath),
   readDir: (p) => ipcRenderer.invoke('read-dir', p),
   readFile: (p) => ipcRenderer.invoke('read-file', p),
   writeFile: (p, content) => ipcRenderer.invoke('write-file', p, content),

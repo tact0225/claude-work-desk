@@ -282,6 +282,20 @@ ipcMain.handle('list-worktrees', async () => {
   return out
 })
 
+// 最下段タブに足すフォルダを選ぶだけのダイアログ。
+// ⚠ choose-root を流用しない。あちらは config.root（＝_inbox の置き場）ごと書き換える＝
+//    「タブを足しただけで投入先が動く」という、この機能で一番やってはいけない事故になる。
+//    ここは選んだパスを返すだけで、設定には一切触らない（返り値の使い道は renderer 側）。
+ipcMain.handle('choose-folder', async (_e, defaultPath) => {
+  const r = await dialog.showOpenDialog({
+    title: t('main.chooseFolderTitle'),
+    properties: ['openDirectory'],
+    defaultPath: defaultPath || rootDir() || undefined,
+  })
+  if (r.canceled || !r.filePaths[0]) return null
+  return r.filePaths[0]
+})
+
 ipcMain.handle('choose-root', async () => {
   const r = await dialog.showOpenDialog({
     title: t('main.chooseTitle'),

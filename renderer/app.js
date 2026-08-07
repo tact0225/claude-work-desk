@@ -12,6 +12,16 @@ const openDirs = new Set() // F5リロード後に展開状態を復元する
 // パス欄で worktree レーンなど外のフォルダに移っても _inbox の投入先は動かさない。
 let browseRoot = ''
 
+// 最下段のフォルダタブ（Excelのシートタブ風）。1タブ = 1フォルダ。
+// ⚠ タブが動かすのは browseRoot（＝見る場所）だけ。CONFIG.root と #inbox-* には触らない。
+//    「タブを切り替えても投入先は動かない」がこの機能の不変条件。
+let tabs = []
+let activeTab = 0
+
+// 展開の復元中だけ、makeNode が撃つ「子フォルダの読み込み」を集める入れ物。
+// null の間は集めない＝2秒ごとのポーリング経由で作られたノードのぶんを溜め込まない。
+let openWaiters = null
+
 // 入力モード（書き込み）の状態。既定はプレビュー＝読むだけ。
 let editMode = false
 let editDirty = false
@@ -77,11 +87,16 @@ async function init() {
   setupDrop()
   setupGlobal()
   setupPathBar()
+  setupTabs()
   // ⚠ ルートピッカーで止まる経路でも腐り検知の窓口を空にしない。空文字だと幅が0になり、
   //    「止まっている」ことが画面に出ないうえクリックでの再開すら押せない（QA致命1）
   setSyncStatus()
   if (!CONFIG.rootOk) { showRootPicker(); return }
-  await openWorkspace(await startingRoot())
+  loadTabs()
+  const tb = await startingTab()
+  saveTabs()
+  renderTabs()
+  await openWorkspace(tb)
 }
 
 // ワークスペースを開く＝ツリーを出して自動更新を動かすところまで。
@@ -91,9 +106,9 @@ async function init() {
 //    初回起動と、WSLが上がる前にDeskを開いた朝の「選び直し」で実際に踏む動線。
 // ⚠ ツリー構築が転んでもポーリングだけは必ず始める（finally）。途中の例外ひとつで
 //    そのセッションが二度と自動更新しなくなる、という同じ壊れ方をここで閉じておく。
-async function openWorkspace(dir) {
+async function openWorkspace(tb) {
   try {
-    await setBrowseRoot(dir)
+    await openTab(tb)
   } catch (err) {
     console.error('[init] ツリーの初期表示に失敗:', err)
   } finally {
@@ -116,23 +131,41 @@ async function startAutoRefresh() {
   }
 }
 
-// 前回見ていたフォルダを復元。撤収済みレーン等で消えていたら黙ってワークスペースへ戻る
-async function startingRoot() {
-  const saved = localStorage.browseRoot
-  if (saved && saved !== CONFIG.root) {
-    const r = await api.resolveTarget(saved)
-    if (r.ok && r.isDir) return r.path
-    localStorage.removeItem('browseRoot')
-  }
-  return CONFIG.root
+// 起動時に開くタブを決める。撤収済みレーン等で行き先が消えていたら、
+// ⚠ を付けたままタブは残し（勝手に消さない＝WSLが上がっていない朝に全部消えるのを防ぐ）、
+// 表示だけ1枚目（ワークスペース）へ落とす。
+// ⚠ ここで実測するのは「これから開く1枚」だけ。全タブを起動時に stat すると、
+//    WSL越しの往復がタブの枚数ぶん積み上がって起動が目に見えて遅くなる。
+//    他のタブの⚠は、押した時（activateTab）に付く。
+async function startingTab() {
+  const tb = tabs[activeTab] || tabs[0]
+  if (samePath(tb.path, CONFIG.root)) return tb
+  let r = null
+  try { r = await api.resolveTarget(tb.path) } catch (err) { r = null }
+  if (r && r.ok && r.isDir) { tb.path = r.path; return tb }
+  // 1枚目そのものが行方不明なら⚠を付けても意味がない（この後ワークスペースに戻すので嘘になる）
+  if (tb !== tabs[0]) tb.bad = true
+  activeTab = 0
+  resetTabTo(tabs[0], CONFIG.root)
+  return tabs[0]
 }
 
 // ルート変更（初回設定・設定パネルからの変更 共通）
 async function reloadRoot() {
   CONFIG = await api.getConfig()
   if (!CONFIG.rootOk) { showRootPicker(); setSyncStatus(); return }
+  // ⚠ ワークスペースが変わったらタブは作り直す。前のワークスペースの隣にあったレーンを
+  //    指すタブは新しいワークスペースでは意味を持たず、⚠だらけのタブ列だけが残る。
+  localStorage.removeItem(TABS_KEY)
   localStorage.removeItem('browseRoot')
-  await openWorkspace(CONFIG.root)
+  tabs = [newTab(CONFIG.root)]
+  activeTab = 0
+  // ここは「新しいワークスペースのタブ集合を確定した」経路＝保存してよい状態になる
+  // （ルートピッカーで止まったまま終了した時とは違う。上の tabsLoaded のコメント参照）
+  tabsLoaded = true
+  saveTabs()
+  renderTabs()
+  await openWorkspace(tabs[0])
 }
 
 // ---------- パス欄（アドレスバー） ----------
@@ -160,10 +193,16 @@ function parentOf(p) {
   return up.replace(/[\\/]+$/, '').length >= 2 ? up : null
 }
 
-async function setBrowseRoot(dir, { record = false } = {}) {
+// restoreOpen: そのタブで展開していたフォルダの集合（Excelのシートタブ風の「続きから」）。
+// ⚠ openDirs は「消す」のではなく「入れ替える」。clear だけにするとタブに戻った時に
+//    展開が全部畳まれ、続きから、が成立しない。差分適用とポーリングは openDirs の中身を
+//    そのまま信じて動くので、入れ替えは loadTreeRoot の前に済ませておく必要がある。
+// record: パス欄の履歴（▾）に積むか。
+// ⚠ 積むのはパス欄で「行った」時だけ。タブの切替（openTab）からは積まない——タブは
+//    意図して固定した場所、履歴はさっき行った場所で別物なので、タブを往復するたびに
+//    履歴が同じ場所で埋まると履歴の役目が消える（本田さんの線引き）。
+async function setBrowseRoot(dir, { restoreOpen = null, record = false } = {}) {
   browseRoot = dir
-  if (samePath(dir, CONFIG.root)) localStorage.removeItem('browseRoot')
-  else localStorage.browseRoot = dir
   if (record) pushPathHistory(dir)
 
   const away = !samePath(dir, CONFIG.root)
@@ -173,13 +212,30 @@ async function setBrowseRoot(dir, { record = false } = {}) {
   $('#root-name').classList.toggle('away', away)
   refreshInboxLabel() // #root-name の title もここで貼る
   openDirs.clear()
+  if (restoreOpen) for (const p of restoreOpen) openDirs.add(p)
   await loadTreeRoot()
 }
 
+// パス欄 Enter / Go / ↑ の行き先。
+// ⚠ ブラウザのタブと同じで「アクティブタブのパスが書き換わる」＝新しいタブは作らない
+//    （↑ を連打するたびにタブが増えていくと、タブが履歴の墓場になる・本田さん合意）。
 async function gotoPath(input) {
+  // ⚠ 入力モードの未保存はここでも訊く。移動すると resetTabTo が tb.sel を捨てる＝
+  //    「ツリーのどこにも無いファイルを編集し続けている」状態になり、タブを往復した
+  //    時点で書きかけが黙って消える（v0.9 までは訊いていなかったが、タブの導入で悪化した）
+  if (!await leaveEditMode()) return
   const r = await api.resolveTarget(input)
   if (!r.ok) { pathBarError(r.error); return }
+  const tb = tabs[activeTab]
+  // 行き先が変わる＝そのタブの「続きから」（展開・選択・スクロール）は別の場所のものになる。
+  // ⚠ 同じフォルダへの Go でも捨てる。setBrowseRoot は必ず展開を畳むので、
+  //    ここで記録だけ残すと「画面は畳まれているのにタブの記憶は開いたまま」がズレて残る
+  if (tb) {
+    resetTabTo(tb, r.path)
+    saveTabs()
+  }
   await setBrowseRoot(r.path, { record: true })
+  renderTabs() // 1枚目は表示名がパス由来＝移動したら見出しも変わる
   if (r.filePath) openPreview(r.filePath) // ファイルを貼られたら親を開いてその1枚を出す
 }
 
@@ -190,55 +246,46 @@ function pathBarError(msg) {
   setTimeout(() => el.classList.remove('bad'), 1400)
 }
 
+// ---------- パス欄の履歴（▾） ----------
+// タブとは役割が別物。タブ＝意図して固定する場所、履歴＝さっき行った場所（本田さんの線引き）。
+// ⚠ 🌿レーンはここに出さない。レーンの入口は ＋ の右クリックに一本化する（同じものへの
+//    入口を2つ持つと、直す時にどちらを直せばいいのか分からなくなる）。レーンを出さない＝
+//    実測（listWorktrees の await）が要らないので、ここは同期処理で足りる。
+
+const PATH_HIST_MAX = 20
+
 function pathHistory() {
-  try { return JSON.parse(localStorage.pathHistory || '[]') } catch (e) { return [] }
+  // ⚠ 壊れたJSON・配列でない・文字列以外が混ざっている、のどれでも落ちない
+  try {
+    const list = JSON.parse(localStorage.pathHistory || '[]')
+    return Array.isArray(list) ? list.filter(p => typeof p === 'string' && p) : []
+  } catch (err) { return [] }
 }
 
 function pushPathHistory(p) {
-  const list = pathHistory().filter(x => !samePath(x, p))
+  if (!p) return
+  const list = pathHistory().filter(x => !samePath(x, p)) // 同じ場所は積み直さず先頭へ
   list.unshift(p)
-  localStorage.pathHistory = JSON.stringify(list.slice(0, 20))
+  // ⚠ 上限を外さない。パス欄で動くたびに積むので、際限なく伸びて localStorage を食う
+  const next = JSON.stringify(list.slice(0, PATH_HIST_MAX))
+  // ⚠ try で包むのは保存の一行だけ。組み立てごと包むと、この中の書き間違い（未定義の参照など）まで
+  //    握り潰されて「履歴が積まれないのにエラーも出ない」になる（実際にテストで踏んだ）
+  try { localStorage.pathHistory = next } catch (err) { /* 保存できなくても操作は続ける */ }
 }
 
 function hidePathHist() { $('#path-hist').classList.remove('show') }
 
-let pathHistBusy = false // レーン実測（await）中の二度押しで二重描画しないための鍵
-
-async function togglePathHist() {
+function togglePathHist() {
   const box = $('#path-hist')
   if (box.classList.contains('show')) { hidePathHist(); return }
-  if (pathHistBusy) return
-  pathHistBusy = true
-  // worktree レーンは開くたびに実測する＝撤収済みレーンが残らない・新レーンは次に開けば出る。
-  // 検出に失敗しても履歴だけは必ず出す（レーンはおまけ、履歴が本体）。
-  let lanes = []
-  try { lanes = await api.listWorktrees() } catch (e) { /* 履歴だけ出す */ }
-  pathHistBusy = false
   const list = pathHistory()
   box.innerHTML = ''
-  if (lanes.length) {
-    const head = document.createElement('div')
-    head.className = 'hist-head'
-    head.textContent = t('hist.lanes')
-    box.appendChild(head)
-    for (const ln of lanes) {
-      const it = document.createElement('div')
-      it.className = 'hist-item' + (samePath(ln.path, browseRoot) ? ' current' : '')
-      it.textContent = `🌿 ${ln.name}`
-      it.title = ln.path
-      it.addEventListener('click', () => { hidePathHist(); gotoPath(ln.path) })
-      box.appendChild(it)
-    }
-    if (list.length) {
-      const head2 = document.createElement('div')
-      head2.className = 'hist-head'
-      head2.textContent = t('hist.recent')
-      box.appendChild(head2)
-    }
-  }
-  if (!list.length && !lanes.length) {
-    box.innerHTML = `<div class="hist-empty">${escapeHtml(t('hist.empty'))}</div>`
-  } else if (list.length) {
+  if (!list.length) {
+    const empty = document.createElement('div')
+    empty.className = 'hist-empty'
+    empty.textContent = t('hist.empty')
+    box.appendChild(empty)
+  } else {
     for (const p of list) {
       const it = document.createElement('div')
       it.className = 'hist-item' + (samePath(p, browseRoot) ? ' current' : '')
@@ -264,12 +311,394 @@ function setupPathBar() {
     if (e.key === 'ArrowDown') { e.preventDefault(); togglePathHist() }
   })
   input.addEventListener('focus', () => input.select())
-  $('#btn-path-go').addEventListener('click', () => gotoPath(input.value))
   $('#btn-path-hist').addEventListener('click', (e) => { e.stopPropagation(); togglePathHist() })
-  $('#btn-home').addEventListener('click', () => { if (CONFIG.rootOk) setBrowseRoot(CONFIG.root) })
+  $('#btn-home').addEventListener('click', goHome)
   $('#btn-up').addEventListener('click', () => {
     const up = parentOf(browseRoot)
     if (up) gotoPath(up)
+  })
+}
+
+// ---------- 最下段のフォルダタブ（Excelのシートタブ風） ----------
+// 1タブ = 1フォルダ。狙いは ~/.claude や memory のような「ワークスペースの外／hidden で
+// ツリーに出ないフォルダ」へ一発で行き来すること（hidden 判定は子エントリの名前で弾いて
+// いるので、browseRoot 自身が ~/.claude なら中身は普通に見える＝これが成立する理由）。
+// v0.9 までのパス欄の ▾履歴 はこれに置き換えた（役割が丸ごと重なるため）。
+//
+// ⚠ 動かすのは browseRoot だけ。CONFIG.root（_inbox の投入先）は切り替えても動かさない。
+// ⚠ 保存先は localStorage。会社PCと自宅PCでパスが違ううえ、この repo は公開しているので
+//    config.json に個人のパスを焼き込むのは論外（PC別に正しいのはこちらだけ）。
+
+const TABS_KEY = 'tabs'
+
+function newTab(p, name) {
+  // open/sel/scroll がタブごとの「続きから」の中身。bad は保存しない（下の saveTabs 参照）
+  return { path: p, name: name || '', open: [], sel: null, scroll: 0, bad: false }
+}
+
+// 行き先が変わったタブの状態を捨てる。展開・選択・スクロールは「そのフォルダのもの」なので、
+// パスだけ差し替えて持ち回ると、まったく別のフォルダの記憶を復元しようとして空振りする。
+function resetTabTo(tb, p) {
+  tb.path = p
+  tb.open = []
+  tb.sel = null
+  tb.scroll = 0
+  tb.bad = false
+}
+
+// タブの見出し。1枚目だけは常にパス由来にする＝「⌂ で必ずワークスペースに戻れる」と対で、
+// 1枚目が今どこを指しているかが見出しに出ていないと、タブが嘘の地図になる。
+function tabLabel(tb, i) {
+  const base = baseName(tb.path) || tb.path
+  return i === 0 ? base : (tb.name || base)
+}
+
+// タブを一度でも読み込んだか。⚠ これが立つまで保存は絶対にしない。
+// WSLが上がっていない朝に開くとルートピッカーで止まり、tabs は空のまま＝そこで保存すると
+// 前の晩のタブが空配列で上書きされ、復旧不能で全部消える（実機で3回踏んだ）。
+// ⚠ 歯止めは呼び出し側（beforeunload 等）ではなく saveTabs の中に置く。入口は今後も増える。
+let tabsLoaded = false
+
+function saveTabs() {
+  if (!tabsLoaded) return
+  // ⚠ bad は保存しない。WSLが落ちている間に付いた⚠を次の起動まで引きずると、
+  //    復旧しているのに壊れて見える（実測で付け直せる印を永続化しない）
+  try {
+    localStorage[TABS_KEY] = JSON.stringify({
+      v: 1,
+      active: activeTab,
+      tabs: tabs.map(tb => ({ path: tb.path, name: tb.name, open: tb.open, sel: tb.sel, scroll: tb.scroll })),
+    })
+  } catch (err) { /* 保存できなくても操作は続けさせる（次の起動で既定に戻るだけ） */ }
+}
+
+// ⚠ 壊れたJSONを読んでも起動不能にしない（旧 pathHistory と同じ作法）。
+//    型もここで1つずつ確かめる＝手で書き換えられた localStorage で描画側が落ちない。
+function loadTabs() {
+  tabs = []
+  activeTab = 0
+  let saved = null
+  try { saved = JSON.parse(localStorage[TABS_KEY] || 'null') } catch (err) { saved = null }
+  if (saved && Array.isArray(saved.tabs)) {
+    for (const raw of saved.tabs) {
+      if (!raw || typeof raw.path !== 'string' || !raw.path) continue
+      const tb = newTab(raw.path, typeof raw.name === 'string' ? raw.name : '')
+      tb.open = Array.isArray(raw.open) ? raw.open.filter(x => typeof x === 'string') : []
+      tb.sel = typeof raw.sel === 'string' ? raw.sel : null
+      tb.scroll = Number(raw.scroll) || 0
+      tabs.push(tb)
+    }
+    if (Number.isInteger(saved.active)) activeTab = saved.active
+  }
+  // 1枚目（ワークスペース・閉じられないタブ）は必ず1枚ある
+  if (!tabs.length) tabs.push(newTab(CONFIG.root))
+  // v0.9 までの localStorage.browseRoot（前回見ていたフォルダを1つだけ覚えていた）の移行。
+  // 黙って捨てるとレーンを覗いたまま終えた人が次の起動で行き先を失うので、タブとして拾ってから消す。
+  const legacy = localStorage.browseRoot
+  if (legacy) {
+    localStorage.removeItem('browseRoot')
+    if (!saved && !samePath(legacy, CONFIG.root)) {
+      tabs.push(newTab(legacy))
+      activeTab = tabs.length - 1
+    }
+  }
+  if (!(activeTab >= 0 && activeTab < tabs.length)) activeTab = 0
+  tabsLoaded = true // ここを通って初めて保存を許す（上の tabsLoaded のコメント参照）
+}
+
+function renderTabs() {
+  const box = $('#tabs')
+  // ⚠ innerHTML を空にしない。＋ボタンは #tabs の子（最後のタブの直後）なので、
+  //    まとめて消すと毎回作り直しになりリスナーごと消える。タブ行だけ差し替える。
+  const addBtn = $('#btn-tab-add')
+  for (const el of [...box.querySelectorAll('.tab')]) el.remove()
+  tabs.forEach((tb, i) => {
+    const el = document.createElement('div')
+    el.className = 'tab' + (i === activeTab ? ' active' : '') + (tb.bad ? ' bad' : '')
+    el.textContent = (tb.bad ? '⚠ ' : '') + tabLabel(tb, i)
+    el.title = tb.path
+    el.addEventListener('click', () => activateTab(i))
+    el.addEventListener('contextmenu', (e) => showTabMenu(e, i))
+    box.insertBefore(el, addBtn)
+  })
+  // タブが増えて横スクロールに入っても、今いるタブは見えている状態にする
+  const cur = box.children[activeTab]
+  if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+// 今のタブへ「続きから」を退避する。切替の直前に呼ぶ。
+function captureTab() {
+  const tb = tabs[activeTab]
+  if (!tb) return
+  if (browseRoot) tb.path = browseRoot
+  tb.open = [...openDirs]
+  tb.sel = currentFile ? currentFile.path : null
+  tb.scroll = $('#tree').scrollTop
+}
+
+// 展開の復元は makeNode の中で非同期に走る（子フォルダを読みに行く）。待たずに選択や
+// スクロールを戻すと、深い階層の行がまだ生えておらず復元が空振りする。
+// ⚠ 回数の上限を置く。openDirs に循環（symlink 等）が紛れても、ここで永久に回らないように。
+async function settleOpenWaiters() {
+  for (let round = 0; openWaiters && openWaiters.length && round < 50; round++) {
+    await Promise.all(openWaiters.splice(0))
+  }
+}
+
+// 選択していたファイルとプレビューを戻す。
+// ⚠ ツリーに見えていない（消えた・読めなかった）なら黙って諦めるが、tb.sel は消さない。
+//    WSLが一瞬途切れただけで「次に戻った時の続き」まで失うのは割に合わない。
+async function restoreTabSelection(tb) {
+  if (!tb.sel) return
+  const el = nodeByPath.get(pathKey(tb.sel))
+  if (!el || !el._node || el._node.isDir) return
+  if (await openPreview(tb.sel)) selectRow(el._node.row)
+}
+
+async function openTab(tb) {
+  openWaiters = []
+  try {
+    await setBrowseRoot(tb.path, { restoreOpen: tb.open })
+    await settleOpenWaiters()
+  } finally {
+    openWaiters = null // ⚠ 例外で抜けても必ず戻す。集めっぱなしにするとポーリングぶんが溜まる
+  }
+  $('#tree').scrollTop = tb.scroll || 0
+  await restoreTabSelection(tb)
+  renderTabs()
+}
+
+// 切替の走行中は次の切替を重ねない鍵。連打で2本の openTab が噛み合うと、
+// 片方のツリーの上にもう片方の「続きから」を復元しにいく（選択とスクロールが混ざる）。
+let tabSwitchBusy = false
+// 走行中に来た切替は捨てず、1件だけ覚えて終わってから実行する（Ctrl+Tab連打の1回が無反応、を防ぐ）。
+// ⚠ 覚えるのは「行き先の番号」ではなく処理そのもの。番号で覚えると、連打の2回目が
+//    まだ動いていない activeTab から行き先を計算して同じタブへ二度行く。
+let tabSwitchPending = null
+
+async function activateTab(i, { force = false, capture = true } = {}) {
+  const tb = tabs[i]
+  if (!tb) return
+  if (i === activeTab && !force) return
+  if (tabSwitchBusy) { tabSwitchPending = () => activateTab(i, { force, capture }); return }
+  tabSwitchBusy = true
+  try {
+    // ⚠ 入力モードの未保存を飛ばさない。取り消されたら切り替えごと中止する。
+    //    見た目を先に動かしていないので、ここで戻すのは念のため（描き直せば activeTab が正）。
+    if (!await leaveEditMode()) { renderTabs(); return }
+    // 撤収済みレーンや消したフォルダを指すタブがありうる。⚠ を付けて残すだけにする＝
+    // 勝手に消さない（WSLが一瞬途切れただけでタブが消えると、二度と戻せない）。
+    let r = null
+    try { r = await api.resolveTarget(tb.path) } catch (err) { r = null }
+    if (!r || !r.ok || !r.isDir) {
+      tb.bad = true
+      renderTabs()
+      showToast(t('tab.gone', { path: tb.path }), 2600)
+      return
+    }
+    // 正規化後のパスで持ち直す。WSL形式（/home/...）のまま持つと readDir が届かない
+    tb.path = r.path
+    tb.bad = false
+    if (capture) captureTab()
+    activeTab = i
+    saveTabs()
+    await openTab(tb)
+  } finally {
+    tabSwitchBusy = false
+    const next = tabSwitchPending
+    tabSwitchPending = null
+    if (next) await next()
+  }
+}
+
+// ⌂ は「1枚目＝ワークスペース」へ戻る道。1枚目がパス欄ナビで外へ出ていても、
+// ここで必ず CONFIG.root に引き戻す（⌂で戻れる、という約束を守っている唯一の場所）。
+async function goHome() {
+  if (!CONFIG.rootOk) return
+  if (!await leaveEditMode()) return
+  captureTab()
+  const home = tabs[0]
+  if (!samePath(home.path, CONFIG.root)) resetTabTo(home, CONFIG.root)
+  home.bad = false
+  activeTab = 0
+  saveTabs()
+  renderTabs()
+  await activateTab(0, { force: true, capture: false })
+}
+
+function stepTab(d) {
+  if (tabs.length < 2) return
+  // ⚠ 走行中なら「隣へ」という意図のまま覚える。ここで行き先を先に計算して覚えると、
+  //    連打の2回目が同じ行き先になって1枚ぶんしか進まない
+  if (tabSwitchBusy) { tabSwitchPending = () => stepTab(d); return }
+  activateTab((activeTab + d + tabs.length) % tabs.length)
+}
+
+// 既にあるタブへ移った時に、そのタブを一瞬光らせる。
+// ⚠ 「押したのに何も起きない」に見えるのを防ぐためだけの合図。トーストのような
+//    大げさなものは足さない（増えなかったことさえ伝われば用は足りる）。
+function flashTab(i) {
+  const el = $('#tabs').children[i]
+  if (!el) return
+  el.classList.remove('flash')
+  void el.offsetWidth // 連続で押した時にアニメーションを頭から流し直すためのリフロー
+  el.classList.add('flash')
+  setTimeout(() => el.classList.remove('flash'), 700)
+}
+
+// 行き先を指して足す（レーン一覧・フォルダを選ぶ…・ツリーの「タブで開く」）。
+// 既にあるものは重複させず、そのタブをアクティブにする（同じフォルダのタブが2枚並ばない）。
+// 増えないぶん、光らせて「そこにある」ことを見せる。
+async function addTab(p) {
+  if (!p) return
+  const i = tabs.findIndex(tb => samePath(tb.path, p))
+  if (i >= 0) { await activateTab(i); flashTab(i); return }
+  await createTab(p)
+}
+
+// 必ず1枚増やす。
+// ⚠ 未保存の確認はタブを足す「前」。後回しにすると、取り消した時にタブだけ増えて
+//    アクティブにならず、押した結果と画面が食い違う（閉じる時と同じ轍）。
+//    ここを通った後の activateTab 側の確認は素通りする（もう入力モードを抜けている）。
+async function createTab(p) {
+  if (!await leaveEditMode()) return
+  tabs.push(newTab(p))
+  saveTabs()
+  renderTabs()
+  await activateTab(tabs.length - 1)
+}
+
+// ＋ボタン（と📌今のフォルダをタブに追加）＝「今いる場所をタブとして残す」。
+// ⚠ ここで addTab の重複判定をそのまま使うと、＋を押しても永久に1枚も増えない。
+//    パス欄で移動するとアクティブタブのパスが書き換わる仕様＝browseRoot は常に
+//    アクティブタブのパスと一致していて、必ず自分自身に当たるため（実装を素直に
+//    繋ぐと「押しても何も起きないボタン」が出来上がる。テストで気づいた）。
+//    なので一致を見るのは「今のタブ以外」だけ。他所に同じ場所のタブがあればそこへ移り、
+//    無ければ今の場所を新しい1枚として残す。
+async function pinCurrentTab() {
+  if (!browseRoot) return
+  const i = tabs.findIndex((tb, k) => k !== activeTab && samePath(tb.path, browseRoot))
+  if (i >= 0) { await activateTab(i); flashTab(i); return }
+  await createTab(browseRoot)
+}
+
+async function closeTab(i) {
+  if (i <= 0 || i >= tabs.length) return // 1枚目（ワークスペース）は閉じられない
+  // 切替の走行中は閉じない。走行中に配列をいじると、進行中の切替が別のタブを開き終えた後に
+  // 添字だけズレた状態で残る（ツリーとタブバーが食い違う）
+  if (tabSwitchBusy) return
+  const wasActive = activeTab === i
+  // ⚠ 破棄確認は splice の「前」。順序を逆にすると〈いいえ〉で取り消しても
+  //    タブは減ったまま・保存も済んでいて、復旧する手立てが無い（実機で踏んだ）。
+  //    状態を壊してから確認する順序そのものが誤りで、return を足しても直らない。
+  if (wasActive && !await leaveEditMode()) return
+  tabs.splice(i, 1)
+  if (wasActive) {
+    activeTab = Math.max(0, i - 1)
+    saveTabs()
+    renderTabs()
+    // ⚠ capture: false。ここで退避すると、閉じたタブのツリー状態を移動先のタブに
+    //    上書きしてしまう（移動先の「続きから」が消える）
+    await activateTab(activeTab, { force: true, capture: false })
+    return
+  }
+  // ⚠ 自分より前のタブが消えた＝アクティブの添字が1つ手前へずれる。ここを落とすと
+  //    タブバーの反転位置とツリーの中身が食い違ったまま保存される
+  if (activeTab > i) activeTab--
+  saveTabs()
+  renderTabs()
+}
+
+// 名前の変更はタブの上で直接行う。
+// ⚠ prompt() は使えない（Electron の renderer は window.prompt を実装していない＝
+//    押しても何も起きないメニュー項目になる）。
+function startRenameTab(i) {
+  const el = $('#tabs').children[i]
+  const tb = tabs[i]
+  if (!el || !tb) return
+  el.textContent = ''
+  const input = document.createElement('input')
+  input.className = 'tab-rename'
+  input.value = tabLabel(tb, i)
+  el.appendChild(input)
+  input.focus()
+  input.select()
+  let done = false
+  const commit = (save) => {
+    if (done) return // blur と Enter が二重に走る
+    done = true
+    if (save) {
+      const v = input.value.trim()
+      // 空にしたら既定（フォルダ名）へ戻す＝消せない名前を作らない
+      tb.name = (!v || v === baseName(tb.path)) ? '' : v
+      saveTabs()
+    }
+    renderTabs()
+  }
+  // ⚠ キー入力をタブの外へ漏らさない。漏らすと Ctrl+1〜9 / Ctrl+Tab のタブ切替や
+  //    Escape のメニュー閉じに、名前を打っている最中の入力を奪われる
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation()
+    if (e.key === 'Enter') commit(true)
+    if (e.key === 'Escape') commit(false)
+  })
+  input.addEventListener('blur', () => commit(true))
+  input.addEventListener('click', (e) => e.stopPropagation()) // タブ本体のクリック（切替）を止める
+}
+
+function showTabMenu(e, i) {
+  const tb = tabs[i]
+  if (!tb) return
+  const locked = i === 0
+  showMenu(e, [
+    [t('tab.rename'), () => startRenameTab(i), { disabled: locked, title: locked ? t('tab.renameLocked') : '' }],
+    [t('tab.copyPath'), () => navigator.clipboard.writeText(tb.path)],
+    [t('tab.close'), () => closeTab(i), { disabled: locked, title: locked ? t('tab.closeLocked') : '' }],
+  ])
+}
+
+let tabMenuBusy = false // レーン実測（await）中の二度押しで二重に開かないための鍵
+
+async function showTabAddMenu(e) {
+  if (!CONFIG || !CONFIG.rootOk || tabMenuBusy) return
+  tabMenuBusy = true
+  // worktree レーンは押すたびに実測する＝撤収済みレーンは自然に消え、新しいレーンは次に出る。
+  // ⚠ 検出に失敗しても他の項目は必ず出す（レーンはおまけ・旧 togglePathHist と同じ堅牢性）
+  let lanes = []
+  try { lanes = await api.listWorktrees() } catch (err) { /* 他の項目だけ出す */ }
+  tabMenuBusy = false
+  const items = []
+  if (lanes.length) {
+    items.push([t('tab.lanes'), null, { head: true }])
+    for (const ln of lanes) items.push([`🌿 ${ln.name}`, () => addTab(ln.path), { title: ln.path }])
+    items.push(['', null, { sep: true }])
+  }
+  items.push([t('tab.addCurrent'), () => pinCurrentTab(), { title: browseRoot }])
+  items.push([t('tab.addFolder'), chooseFolderTab])
+  showMenu(e, items)
+}
+
+async function chooseFolderTab() {
+  // ⚠ api.chooseRoot は絶対に流用しない。あれは config.root（＝_inbox の置き場）ごと
+  //    書き換える＝「タブを足しただけで投入先が動く」という一番やってはいけない事故になる。
+  let p = null
+  try { p = await api.chooseFolder(browseRoot || CONFIG.root) } catch (err) { return }
+  if (p) await addTab(p)
+}
+
+function setupTabs() {
+  const btn = $('#btn-tab-add')
+  // ⚠ 左クリックはメニューを開かず「今見ているフォルダをタブにする」を即実行する。
+  //    メニューを開く作りにしていたら、本田さんは実機で増やし方を見つけられなかった＝
+  //    ＋が「選ばせるボタン」に見え、「増やすボタン」に見えていなかった。
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation() // 直後の window クリック（メニューを閉じる）に巻き込まれないように
+    pinCurrentTab()
+  })
+  // 他の足し方（レーン一覧・フォルダを選ぶ…）は消さずに右クリックへ退避
+  btn.addEventListener('contextmenu', (e) => {
+    e.stopPropagation()
+    showTabAddMenu(e)
   })
 }
 
@@ -373,11 +802,22 @@ function makeNode(en, depth) {
     }
   }
 
-  row.addEventListener('click', async () => {
+  row.addEventListener('click', async (e) => {
+    // ⚠ ダブルクリックの2発目では開閉を動かさない。フォルダのダブルクリックは「タブで開く」で、
+    //    素通しにすると「開く→閉じる」が一瞬走ってちらつく（e.detail はその click が
+    //    連打の何発目かを教えてくれる。プログラムからの .click() は 0 なので素通りする）。
+    if (en.isDir) { if (e && e.detail > 1) return; toggleDir() }
     // 入力モードの確認で開くのを取り消した時は選択も動かさない（表示中のファイルと選択をずらさない）
-    if (en.isDir) { toggleDir() } else if (await openPreview(en.path)) selectRow(row)
+    else if (await openPreview(en.path)) selectRow(row)
   })
-  row.addEventListener('dblclick', () => api.openPath(en.path))
+  // フォルダは「タブで開く」、ファイルは既定のアプリで開く。
+  // ⚠ フォルダ側は右クリックメニューの「タブで開く」と同じ addTab を通す（別実装を書かない＝
+  //    重複タブの扱いも編集中のガードも自動で揃う）。以前ここでエクスプローラーを開いていたのは
+  //    本田さんが不要と明示し、ダブルクリック＝タブで開く、が直感的だと決まった。
+  row.addEventListener('dblclick', () => {
+    if (en.isDir) addTab(en.path)
+    else api.openPath(en.path)
+  })
   row.addEventListener('dragstart', (e) => {
     e.preventDefault()
     internalDragPath = en.path
@@ -386,7 +826,12 @@ function makeNode(en, depth) {
   })
   row.addEventListener('contextmenu', (e) => showCtxMenu(e, en))
 
-  if (en.isDir && openDirs.has(en.path)) toggleDir(true)
+  if (en.isDir && openDirs.has(en.path)) {
+    const p = toggleDir(true)
+    // タブの復元中だけ「読み終わるのを待てる形」で集める（openWaiters が null の間は集めない＝
+    // 2秒ごとのポーリングで作られたノードのぶんを溜め込まない）
+    if (openWaiters) openWaiters.push(p)
+  }
   return wrap
 }
 
@@ -1177,6 +1622,10 @@ function isBroadDir(p) {
 
 function showCtxMenu(e, en) {
   const items = [
+    // ⚠ フォルダをタブにしたくなる瞬間は、たいていツリーでそのフォルダを見ている時。
+    //    ここに入口が無かったのが「タブの増やし方が分からない」の最大の原因（本田さん実機指摘）。
+    //    先頭に置くのは、フォルダ行では「開く」より Desk の中での行き先変更が主役だから。
+    ...(en.isDir ? [[t('ctx.openInTab'), () => addTab(en.path)]] : []),
     [t('ctx.open'), () => api.openPath(en.path)],
     [t('ctx.explorer'), () => api.showInFolder(en.path)],
     [t('ctx.copyWin'), () => navigator.clipboard.writeText(en.path)],
@@ -1202,6 +1651,16 @@ function showMenu(e, items) {
   const m = $('#ctxmenu')
   m.innerHTML = ''
   for (const [labelText, fn, opt] of items) {
+    // 見出し（🌿レーン 等）と区切り線。押しても何も起きない飾りなので、クリックを
+    // 外へ通さない＝見出しを踏んだだけでメニューが閉じない（無効項目と同じ扱い）
+    if (opt && (opt.head || opt.sep)) {
+      const deco = document.createElement('div')
+      deco.className = opt.sep ? 'ctxsep' : 'ctxhead'
+      if (!opt.sep) deco.textContent = labelText
+      deco.addEventListener('click', (ev) => ev.stopPropagation())
+      m.appendChild(deco)
+      continue
+    }
     const it = document.createElement('div')
     it.className = 'ctxitem' + (opt && opt.disabled ? ' disabled' : '')
     it.textContent = labelText
@@ -1649,10 +2108,22 @@ function setupGlobal() {
     if (mod && (e.key === '+' || e.key === '=' || e.key === ';')) { e.preventDefault(); changeZoom(0.1) }
     if (mod && e.key === '-') { e.preventDefault(); changeZoom(-0.1) }
     if (mod && e.key === '0') { e.preventDefault(); changeZoom(0) }
+    // タブ切替。ズームは Ctrl+0 / Ctrl+± なので 1〜9 とはぶつからない（既存の分岐と共存する）。
+    // 文字入力中でも譲らない＝ブラウザのタブ切替と同じ感覚で押せる（名前変更中の入力欄だけは
+    // 自分で stopPropagation してここに届かないようにしてある）。
+    if (mod && e.key === 'Tab') { e.preventDefault(); stepTab(e.shiftKey ? -1 : 1) }
+    if (mod && !e.altKey && /^[1-9]$/.test(e.key) && Number(e.key) <= tabs.length) {
+      e.preventDefault()
+      activateTab(Number(e.key) - 1)
+    }
   })
   window.addEventListener('click', () => { hideCtxMenu(); hidePathHist() })
   // 入力モードで未保存のまま閉じるのを止める
   window.addEventListener('beforeunload', (e) => {
+    // ⚠ 閉じる直前にタブの「続きから」を書き出す。切替やナビの時にしか保存しないと、
+    //    最後に見ていたタブの展開・選択・スクロールだけが毎回失われる
+    captureTab()
+    saveTabs()
     if (editMode && editDirty) { e.preventDefault(); e.returnValue = '' }
   })
 }

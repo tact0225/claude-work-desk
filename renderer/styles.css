@@ -55,6 +55,8 @@ body {
 #path-input:focus { outline: none; border-color: var(--accent); }
 #path-input::placeholder { color: var(--muted); font-family: var(--font-ui); }
 #path-input.bad { border-color: #ff8f8f; color: #ff8f8f; }
+
+/* 履歴（▾）。中身は履歴だけ＝🌿レーンは ＋ の右クリックに一本化してある */
 #btn-path-hist {
   border-radius: 0 4px 4px 0 !important;
   padding: 0 8px !important; font-size: 10px !important;
@@ -75,16 +77,67 @@ body {
 .hist-item:hover { background: var(--accent-dim); }
 .hist-item.current { color: var(--accent); }
 .hist-empty { padding: 6px 12px; color: var(--muted); font-size: 12px; }
-.hist-head {
-  padding: 5px 12px 2px; color: var(--muted); font-size: 11px;
-  border-top: 1px solid var(--border); margin-top: 4px;
-}
-.hist-head:first-child { border-top: none; margin-top: 0; }
 .hist-clear {
   padding: 5px 12px; cursor: pointer; color: var(--muted); font-size: 12px;
   border-top: 1px solid var(--border); margin-top: 4px;
 }
 .hist-clear:hover { color: #ff8f8f; }
+
+/* ---------- 最下段のフォルダタブ（Excelのシートタブ風） ---------- */
+#tabbar {
+  display: flex; align-items: stretch; gap: 6px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+/* タブが増えたら縦に折り返さず横スクロールさせる（下段の高さを一定に保つ） */
+#tabs {
+  display: flex; align-items: stretch; gap: 4px;
+  flex: 1; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  padding: 4px 0 0;
+}
+#tabs::-webkit-scrollbar { height: 5px; }
+.tab {
+  flex-shrink: 0; max-width: 220px;
+  padding: 4px 12px;
+  background: #23272e; color: var(--muted);
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  cursor: pointer; user-select: none; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tab:hover { color: var(--fg); }
+/* 今いるタブは本体（ツリー）と地続きに見せる＝下辺を消して面をつなぐ */
+.tab.active {
+  background: var(--bg); color: var(--fg); font-weight: 600;
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+/* 行き先が見つからないタブ。勝手に閉じない＝⚠を付けて残し、閉じるのは操作で */
+.tab.bad { color: #ff8f8f; border-color: #6b4145; }
+.tab-rename {
+  width: 11em; background: #1b1f24; color: var(--fg);
+  border: 1px solid var(--accent); border-radius: 3px;
+  padding: 0 4px; font-size: 12px; font-family: var(--font-ui);
+}
+.tab-rename:focus { outline: none; }
+/* 既にあるタブへ移った時の合図。増えなかったことが分かればいいので一瞬だけ */
+.tab.flash { animation: tabflash 0.7s ease-out; }
+@keyframes tabflash {
+  0% { background: var(--accent); color: #14181d; }
+  100% { background: var(--bg); }
+}
+/* ＋は最後のタブの直後に並ぶ（#tabs の子）。タブの仲間に見える程度に面を持たせるが、
+   ダーク基調から浮かせない＝色を足すのは hover の時だけ */
+#btn-tab-add {
+  align-self: center; flex-shrink: 0; margin-left: 2px;
+  background: #262b33; border: 1px solid var(--border); color: var(--fg);
+  border-radius: 4px; width: 26px; height: 24px; cursor: pointer;
+  font-size: 14px; line-height: 1;
+}
+#btn-tab-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
 /* ---------- サイドバー（ツリー） ---------- */
 #sidebar {
@@ -398,6 +451,9 @@ body.resizing.row { cursor: row-resize; }
 /* 指定できない項目（ワークスペース全体など）。隠さず理由を title で読ませる */
 .ctxitem.disabled { color: #5d6673; cursor: not-allowed; }
 .ctxitem.disabled:hover { background: none; }
+/* ＋メニューの見出し（🌿レーン 等）と区切り線 */
+.ctxhead { padding: 5px 16px 2px; color: var(--muted); font-size: 11px; }
+.ctxsep { border-top: 1px solid var(--border); margin: 4px 0; }
 
 /* 設定パネル */
 #settings-overlay {

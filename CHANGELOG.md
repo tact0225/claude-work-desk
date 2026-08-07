@@ -2,6 +2,57 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.10.0
+
+**Folder tabs along the bottom. The folders you keep coming back to are one click away — including the ones the tree will never show you.**
+
+### Folder tabs (like sheet tabs in Excel)
+
+- A row of tabs at the bottom of the window. One tab per folder; clicking one moves the tree there.
+- The point is the folders you cannot otherwise reach: `~/.claude`, a `memory/` folder outside the workspace, a worktree lane. Hidden folders are filtered out **by name, among a folder's children**, so a hidden folder works perfectly well as the folder you are *looking at* — which is exactly what a tab makes it.
+- **Three ways to add one.** Right-click a folder in the tree → **Open in a tab** (the folder you want as a tab is almost always the one you are already looking at, and having no entry point there was the whole problem). Click `＋` at the end of the tab row to pin the folder you are viewing. Right-click `＋` for the rest: the **worktree lanes** found next to your workspace, the current folder, or **any folder from a picker**. Lanes are measured every time you open that menu, so a lane you removed is simply gone and a new one shows up without any bookkeeping; if lane detection fails the other items still appear.
+- `＋` sits **immediately after the last tab**, not pinned to the right edge. With one tab open, an edge-pinned `＋` is separated from the tabs by the entire width of the window and stops reading as "add a tab" — which is exactly how it failed in practice. Left-click adds; it does not open a menu, because a button that opens a menu reads as "choose something", not "add one".
+- Adding a folder that already has a tab does not create a second one — it switches to the tab that exists and **flashes it once**, so the press is visibly not a no-op.
+- **Each tab remembers where you were**: which folders were expanded, which file was selected (the preview comes back with it), and where the tree was scrolled. Switching away and back puts you where you left off rather than at a folded-up root.
+- Right-click a tab: **Rename** (the label only — the path never moves), **Copy path**, **Close tab**. `Ctrl+Tab` / `Ctrl+Shift+Tab` step through them and `Ctrl+1`–`Ctrl+9` jump to the nth.
+- The first tab is the workspace and **cannot be closed**; `⌂` always returns to it, even after the path bar has carried it somewhere else. Its label follows the folder it is on, so it never claims to be somewhere it is not.
+- **Switching tabs never moves where dropped files land.** Tabs change what you are looking at, and nothing else. The `↗` marker and the "files still land in `_inbox`" tooltip work exactly as before while you are outside the workspace.
+- Entering a tab while you have **unsaved edits** asks first, and cancelling cancels the switch itself — the same confirmation that already guarded opening another file.
+- A tab pointing at a folder that has gone away (a removed lane, a deleted folder) gets a `⚠` and **stays put**. Removing it automatically would mean WSL blinking out for one second costs you your tabs; closing one is your call. On startup the same applies: a dead tab keeps its `⚠` and only the *view* falls back to the workspace.
+- **Nothing is ever saved before the tabs have been read.** Opening the app before WSL is up stops at the workspace picker, where the tab list is still empty — writing that out on exit would replace last night's tabs with nothing, with no way back. The guard sits inside the save itself, not at the one caller that happens to exist today.
+- **Cancelling a close leaves everything exactly as it was.** Closing a tab with unsaved edits asks first, and that question comes *before* the tab is removed — asking afterwards means "no" leaves you with a tab that is already gone and already saved as gone.
+- Closing a tab while a switch is still running is refused, and a switch requested while another is running is remembered instead of dropped (holding `Ctrl+Tab` moves one tab per press rather than swallowing one).
+- The path bar now asks about unsaved edits too. Navigating drops the tab's memory of the selected file, so continuing to edit a file that is no longer anywhere in the tree used to lose the draft on the next tab switch.
+
+### The path bar
+
+- **`Go` is gone.** Enter does the same thing, and the width it was taking now belongs to the path field.
+- **The `▾` history stays**, and it holds *only* history now. Tabs and history turned out to be different things, not duplicates: a tab is a place you decided to keep, history is where you just were. The worktree lanes moved out of this menu and live under `＋` alone — one entrance per thing. The last entry clears the list, and an empty history says so rather than opening a blank box. `↓` in the path field opens it too.
+- History is recorded **only when you go somewhere from the path bar**. Switching tabs does not push — a tab you flip back and forth would otherwise fill the history with the same two folders and leave nothing to go back to. Capped at 20 entries, and a corrupt saved list falls back to empty instead of breaking the button.
+- Enter / `↑` / a history entry all **rewrite the current tab** instead of opening a new one, the way a browser does — otherwise holding `↑` would breed a tab per level.
+
+### Double-clicking a folder opens it in a tab
+
+- Double-clicking a **folder** in the tree opens it in a tab — the shortest possible version of the thing tabs are for. It used to toggle the folder open and shut (two clicks cancelling out) *and* hand it to Explorer, which nobody was asking for. It runs the same code as the right-click **Open in a tab**, so an existing tab wins instead of a duplicate, and unsaved edits are confirmed first exactly the same way. Right-click still has **Open** and **Show in Explorer** for the Explorer route.
+- The second click of a double-click no longer toggles the folder, so it does not flash open and shut on the way to the tab.
+- Double-clicking a **file** is unchanged: it opens in your default app.
+
+### Implementation
+
+- Tabs live in `localStorage`, not `config.json`: the paths differ between machines, and this repository is public — personal paths have no business being baked into a shipped default. Corrupt saved data is caught and falls back to a single workspace tab rather than refusing to start.
+- Restoring the expanded folders replaces the contents of the open-folder set instead of clearing it, so the 2-second diff-apply and the polling loop keep working off the same state they always did (no full redraw, no lost scroll position).
+- Restoring the selection waits for the expansion to finish loading. Expanding a folder reads its children asynchronously, so restoring the selected file without waiting would silently miss anything below the top level. The wait is bounded, so a cyclic symlink cannot hang it.
+- Pinning the current folder cannot go through the ordinary "already have a tab for this?" check. Navigating rewrites the active tab's path, so the folder you are viewing is *always* the active tab's folder — wired naively, `＋` would match itself every time and never add anything. The check therefore ignores the active tab: another tab on the same folder wins the click, otherwise the current place becomes a new tab.
+- A new `choose-folder` IPC backs the folder picker. It deliberately does **not** reuse `choose-root`, which rewrites the workspace — "adding a tab quietly moved where my files land" is the one failure this feature must never have.
+
+### Checks
+
+- `test-watch.js` now runs the startup path through the real tab code (`loadTabs` / `startingTab` / `saveTabs`): the first tab is always the workspace, a tab whose folder has gone away keeps its `⚠` while the view falls back, a live tab is restored under its normalized path (a WSL-style path would never reach `readDir` as-is), corrupt saved data still boots, and a pre-v0.10 `browseRoot` is migrated into a tab exactly once.
+- The tab operations themselves — `captureTab` / `activateTab` / `closeTab` / `goHome` / `addTab` / `pinCurrentTab` / `stepTab` / `gotoPath` — plus the ways to add a tab (`＋` left-click vs right-click, and the tree's **Open in a tab**) — are run for real against a fake filesystem and a fake DOM, because the startup path alone never touches any of them and **both of the bugs above came out of exactly that blind spot**. The suite is checked by mutation: dropping the captured expansion, dropping the index shift after a close, dropping the restored active tab, moving the discard prompt after the removal, removing the save guard, removing the path-bar prompt, dropping a switch requested mid-switch, closing mid-switch, skipping the restored selection or scroll, turning `＋` back into a menu, letting `＋` match its own tab (the no-op button), dropping the flash, putting **Open in a tab** on file rows, recording history on tab switches, removing the history cap, removing the folder double-click, mixing up which row type gets it, and letting the double-click skip the unsaved-edit prompt — 35 deliberate breakages, all of which the suite now fails on.
+- `grabFn` (the helper that lifts a function out of `app.js` to run it for real) now finds the body after the parameter list. It used to start counting braces at the first `{` it saw, which is the destructured default argument in `activateTab(i, { force = false } = {})` — it would have lifted half a function and died with a syntax error nobody could read.
+
+---
+
 ## v0.9.0
 
 **You can see what the agent changed. No more re-reading the whole article.**

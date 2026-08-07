@@ -11,12 +11,12 @@
 <div id="pathbar">
   <button id="btn-home" data-i18n-title="tip.home">⌂</button>
   <button id="btn-up" data-i18n-title="tip.up">↑</button>
+  <!-- Go は Enter と重複するので置かない（その幅は入力欄に回す）。右端は履歴の ▾ -->
   <div id="path-input-wrap">
     <input type="text" id="path-input" spellcheck="false" autocomplete="off" data-i18n-ph="ph.path">
     <button id="btn-path-hist" data-i18n-title="tip.history">▾</button>
     <div id="path-hist"></div>
   </div>
-  <button id="btn-path-go" data-i18n="btn.go" data-i18n-title="tip.go">Go</button>
 </div>
 <div id="app">
   <aside id="sidebar">
@@ -50,11 +50,20 @@
           <p data-i18n="welcome.dropIn" data-i18n-html></p>
           <p data-i18n="welcome.dblclick" data-i18n-html></p>
           <p data-i18n="welcome.pathbar" data-i18n-html></p>
+          <p data-i18n="welcome.tabs" data-i18n-html></p>
           <p data-i18n="welcome.edit" data-i18n-html></p>
         </div>
       </div>
     </section>
   </main>
+</div>
+<!-- 最下段のフォルダタブ（Excelのシートタブ風）。1タブ = 1フォルダで、動くのはツリーの
+     表示先（browseRoot）だけ＝_inbox の投入先は切り替えても動かない -->
+<div id="tabbar">
+  <!-- ＋ は #tabs の中（最後のタブの直後）に置く。外に出すとタブ1枚の時に画面幅ぶんの空白を
+       挟んで右端に浮き、「タブを増やすボタン」に見えない（本田さん実機指摘）。中に入れておけば
+       タブが増えて横スクロールになっても末尾に付いてきて必ず届く -->
+  <div id="tabs"><button id="btn-tab-add" data-i18n-title="tip.tabAdd">＋</button></div>
 </div>
 </div>
 <div id="drop-overlay"><div class="drop-msg" data-i18n="drop.msg"></div></div>

@@ -100,8 +100,18 @@ function grabFn(name) {
   // ⚠ async を落とさない。落とすと中の await が構文エラーになり「テストが謎の
   //    SyntaxError で落ちる」腐り方をする（切り出しの起点は function より前）
   const from = src.slice(Math.max(0, i - 6), i) === 'async ' ? i - 6 : i
+  // ⚠ 本体の起点は「引数リストを閉じた後の { 」。素直に最初の { から数えると、
+  //    分割代入の既定引数（activateTab(i, { force = false } = {}) 等）を本体と誤認して
+  //    そこで切ってしまい、半分だけの関数が SyntaxError になる（読み切れずに落ちる）
+  let pd = 0
+  let bodyStart = -1
+  for (let k = src.indexOf('(', i); k < src.length; k++) {
+    if (src[k] === '(') pd++
+    else if (src[k] === ')') { pd--; if (!pd) { bodyStart = src.indexOf('{', k); break } }
+  }
+  if (bodyStart < 0) throw new Error('引数リストを読み切れない: ' + name)
   let depth = 0
-  for (let k = src.indexOf('{', i); k < src.length; k++) {
+  for (let k = bodyStart; k < src.length; k++) {
     const c = src[k]
     if (c === '/' && src[k + 1] === '/') {
       const nl = src.indexOf('\n', k)
@@ -194,7 +204,11 @@ function testTreeDiff() {
 // ⚠ ここが丸ごと未検証だったせいで「ルートピッカー経由で起動したセッションでは
 //    startPolling が一度も呼ばれない＝自動更新も未読の印も丸ごと死ぬ」が素通りした（QA致命1）。
 //    ツリー自体は普通に出るので目でも気づけない壊れ方＝テストで縛るしかない層。
-const HARNESS_FNS = ['init', 'startingRoot', 'reloadRoot', 'openWorkspace', 'startAutoRefresh', 'startPolling',
+// タブ機構（v0.10.0）も起動経路の一部になった＝起動時にどのタブを開くかの判断（startingTab）と
+// 保存の読み書き（loadTabs / saveTabs）まで実体で走らせる。ここを偽物で埋めると
+// 「消えたレーンを指すタブで起動したセッションだけツリーが出ない」が素通りする。
+const HARNESS_FNS = ['init', 'newTab', 'resetTabTo', 'loadTabs', 'saveTabs', 'startingTab', 'pathKey', 'samePath',
+  'reloadRoot', 'openWorkspace', 'startAutoRefresh', 'startPolling',
   'stopPolling', 'setSyncStatus', 'schedulePoll', 'pollTick', 'refreshPreview']
 
 function fakeNode() {
@@ -232,7 +246,8 @@ function makeHarness(cfg) {
   ctx.console = { warn: () => ctx.bump('warn'), error: () => ctx.bump('error') }
   ctx.setTimeout = (fn, ms) => { const id = ++seq; timers.set(id, { fn, ms }); return id }
   ctx.clearTimeout = (id) => { timers.delete(id) }
-  ctx.localStorage = { removeItem: () => ctx.bump('lsRemove') }
+  // タブの保存先。実体（loadTabs / saveTabs）を走らせるので、素の入れ物として振る舞わせる
+  ctx.localStorage = { removeItem(k) { ctx.bump('lsRemove'); delete this[k] } }
   ctx.t = (key) => key
   ctx.I18N = { setLang: () => {}, checkMissing: () => {} }
   ctx.$ = (sel) => (sel === '#sync-status' ? ctx.sync : ctx.previewBody)
@@ -257,6 +272,8 @@ function makeHarness(cfg) {
     let pollIdle = true, lastPollAt = 0, lastPollError = ''
     let CONFIG = null, browseRoot = '', currentFile = null, previewMtime = null
     let editMode = false, externalChange = false, treeEpoch = 0, rootBox = null
+    let tabs = [], activeTab = 0, tabsLoaded = false
+    const TABS_KEY = 'tabs'
     const { api, document, localStorage, t, I18N, $, console, setTimeout, clearTimeout, bump } = ctx
     const applyI18n = () => bump('applyI18n')
     const refreshInboxLabel = () => bump('refreshInboxLabel')
@@ -264,8 +281,14 @@ function makeHarness(cfg) {
     const setupDrop = () => bump('setupDrop')
     const setupGlobal = () => bump('setupGlobal')
     const setupPathBar = () => bump('setupPathBar')
+    const setupTabs = () => bump('setupTabs')
+    const renderTabs = () => bump('renderTabs')
+    const baseName = (p) => String(p).replace(/[\\\\/]+$/, '').split(/[\\\\/]/).pop()
     const showRootPicker = () => bump('showRootPicker')
     const setBrowseRoot = async (d) => { bump('setBrowseRoot'); if (ctx.throwOnTree) throw new Error('tree boom'); browseRoot = d }
+    // openTab の中身（展開・選択・スクロールの復元）はDOMの話なので、ここではツリーを
+    // 開くところだけ本物と同じ順序で走らせる＝転んだ時に startAutoRefresh へ抜ける経路を見る
+    const openTab = async (tb) => { bump('openTab'); await setBrowseRoot(tb.path) }
     const setWatchState = () => bump('setWatchState')
     const refreshTree = () => bump('refreshTree')
     const pollDirs = () => []
@@ -274,9 +297,11 @@ function makeHarness(cfg) {
     const applyMarks = () => { bump('applyMarks'); if (ctx.throwOnApply) throw new Error('applyMarks boom') }
     ${HARNESS_FNS.map(grabFn).join('\n')}
     return {
-      init, reloadRoot, pollTick, refreshPreview, startPolling,
+      init, reloadRoot, pollTick, refreshPreview, startPolling, saveTabs,
       state: () => ({ pollTimer, pollFails, pollStopped, pollBusy, pollIdle, lastPollError,
         previewMtime, externalChange, currentFile }),
+      tabs: () => tabs.map(tb => ({ path: tb.path, bad: tb.bad })),
+      active: () => activeTab,
       setConfig: (c) => { CONFIG = c }, // init を通さずポーリング単体を叩く時用
       setPreview: (f, m) => { currentFile = f; previewMtime = m },
       setEdit: (v) => { editMode = v },
@@ -333,6 +358,553 @@ async function testStartupPaths() {
   h.ctx.throwOnApply = true
   await h.init()
   ok(h.ctx.timers.size === 1, '未読の取り込み／印付けで転ぶと自動更新が起動しない')
+
+  // 7) タブ（v0.10.0）: 1枚目は必ずワークスペース。初回起動でも閉じられないタブが1枚できる
+  h = makeHarness()
+  await h.init()
+  ok(h.tabs().length === 1 && h.tabs()[0].path === 'C:\\ws', `1枚目がワークスペースになっていない: ${JSON.stringify(h.tabs())}`)
+
+  // 8) 撤収済みレーンを指すタブで終えた後の起動。⚠を付けてタブは残し（勝手に消さない）、
+  //    表示だけワークスペースへ落とす。ここで転ぶとそのセッションはツリーごと出ない
+  h = makeHarness()
+  h.ctx.localStorage.tabs = JSON.stringify({ v: 1, active: 1, tabs: [{ path: 'C:\\ws' }, { path: 'C:\\ws-gone' }] })
+  h.ctx.api.resolveTarget = async () => ({ ok: false }) // 行き先が消えている
+  await h.init()
+  ok(h.active() === 0, 'タブの行き先が消えている時にワークスペースへ落ちていない')
+  ok(h.tabs().length === 2 && h.tabs()[1].bad === true, `消えたタブを勝手に消している／⚠が付いていない: ${JSON.stringify(h.tabs())}`)
+  ok(h.ctx.timers.size === 1, 'タブの行き先が消えていると自動更新が起動しない')
+
+  // 9) 生きているタブは復元する（正規化後のパスで持ち直す＝WSL形式のまま readDir に渡さない）
+  h = makeHarness()
+  h.ctx.localStorage.tabs = JSON.stringify({ v: 1, active: 1, tabs: [{ path: 'C:\\ws' }, { path: '/home/me/lane' }] })
+  h.ctx.api.resolveTarget = async () => ({ ok: true, isDir: true, path: '\\\\wsl.localhost\\Ubuntu\\home\\me\\lane' })
+  await h.init()
+  ok(h.active() === 1 && h.tabs()[1].path.startsWith('\\\\wsl'), `タブのパスを正規化後で持ち直していない: ${JSON.stringify(h.tabs())}`)
+
+  // 10) 壊れたJSONを読んでも起動不能にならない（手で触られた localStorage で立ち上がらない、を防ぐ）
+  h = makeHarness()
+  h.ctx.localStorage.tabs = '{壊れ'
+  await h.init()
+  ok(h.tabs().length === 1 && h.ctx.timers.size === 1, '壊れた保存データで起動が止まっている')
+
+  // 11) v0.9 までの localStorage.browseRoot はタブとして拾ってから消す（行き先を失わせない）
+  h = makeHarness()
+  h.ctx.localStorage.browseRoot = 'C:\\ws-lane'
+  h.ctx.api.resolveTarget = async () => ({ ok: true, isDir: true, path: 'C:\\ws-lane' })
+  await h.init()
+  ok(h.tabs().length === 2 && h.tabs()[1].path === 'C:\\ws-lane', `旧 browseRoot をタブに移行していない: ${JSON.stringify(h.tabs())}`)
+  ok(h.ctx.localStorage.browseRoot === undefined, '移行後も旧 browseRoot が残っている（次回二重に拾う）')
+
+  // 12) ★P0-2 の回帰（実機の再現手順そのまま）: WSLが上がる前に開くとルートピッカーで止まり、
+  //     タブは一度も読み込まれない。その状態で終了処理（beforeunload の captureTab/saveTabs）が
+  //     走っても、前の晩のタブを空配列で上書きしないこと
+  h = makeHarness({ rootOk: false })
+  const saved = JSON.stringify({ v: 1, active: 1, tabs: [{ path: 'C:\\ws' }, { path: 'C:\\lane' }] })
+  h.ctx.localStorage.tabs = saved
+  await h.init()
+  ok(h.ctx.calls.showRootPicker === 1, 'root 未到達なのにピッカーが出ていない（前提が崩れている）')
+  h.saveTabs() // 終了時にここが走る
+  ok(h.ctx.localStorage.tabs === saved, 'ワークスペースに届かない起動で終了すると保存済みのタブが消える（P0-2）')
+}
+
+// ---------- D) 最下段のフォルダタブ（切替・退避・復元・閉じる） ----------
+// ⚠ ここが無検査だったせいで P0 が2件出た（閉じる時の確認の順序・保存の入口の歯止め）。
+//    起動経路（C）だけでは captureTab / activateTab / closeTab / goHome / addTab / stepTab に
+//    一度も触れない＝タブ機能の本体が丸ごと素通りしていた。DOMは偽物にするが、
+//    タブの状態を動かす関数は全部**実体**を走らせる。
+const TAB_FNS = ['newTab', 'resetTabTo', 'tabLabel', 'saveTabs', 'loadTabs', 'captureTab',
+  'settleOpenWaiters', 'restoreTabSelection', 'openTab', 'activateTab', 'goHome', 'stepTab',
+  'addTab', 'createTab', 'pinCurrentTab', 'closeTab', 'setBrowseRoot', 'gotoPath', 'pathKey', 'samePath', 'baseName', 'parentOf',
+  // タブを増やす動線（本田さんが実機で見つけられなかった箇所）。押した時に何が起きるかまで実体で見る
+  'setupTabs', 'showTabAddMenu', 'showCtxMenu',
+  // パス欄の履歴（▾）。積む場所を間違えると静かに壊れる（タブ切替で汚れる／上限が外れる）
+  'pathHistory', 'pushPathHistory', 'togglePathHist', 'hidePathHist',
+  // ツリーの行そのもの。フォルダとファイルでダブルクリックの扱いが違う
+  'makeNode', 'fileIcon']
+
+// 仮想ファイルシステム。キーがフォルダ、値が直下の名前（キーに無い名前＝ファイル）
+const VFS = {
+  'C:\\ws': ['docs', 'top.md'],
+  'C:\\ws\\docs': ['deep', 'a.md'],
+  'C:\\ws\\docs\\deep': ['d.md'],
+  'C:\\lane1': ['l1.md'],
+  'C:\\lane2': ['l2.md'],
+}
+
+function makeTabHarness() {
+  const calls = {}
+  const nodes = {}
+  const ctx = {
+    calls,
+    vfs: Object.assign({}, VFS),
+    config: { rootOk: true, root: 'C:\\ws', inbox: 'C:\\ws\\_inbox', hidden: [] },
+    localStorage: { removeItem(k) { delete this[k] } },
+    allowLeave: true,   // 入力モードの破棄確認（false = 〈いいえ〉を押した）
+    previewOk: true,
+    gate: null,         // resolveTarget をここで止めると「切替の走行中」が作れる
+    drawn: [],          // renderTabs が描いたであろうタブ列（見た目の突合用）
+    selected: null,
+  }
+  ctx.bump = (k) => { calls[k] = (calls[k] || 0) + 1 }
+  // 偽のDOMノード。addEventListener は捨てずに覚える＝登録したハンドラを
+  // テストから実際に呼べる（＋ボタンの左/右クリックの分岐を実体で踏むため）
+  // 偽の要素。履歴（▾）の中身は要素を組んで作るので、children と classList.contains まで持たせる
+  ctx.mkEl = () => {
+    const cls = new Set()
+    const el = {
+      className: '', textContent: '', title: '', value: '', scrollTop: 0,
+      children: [], handlers: {}, style: {}, draggable: false, _node: null,
+      addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn) },
+      append(...kids) { for (const k of kids) this.children.push(k) },
+      appendChild(c) { this.children.push(c); return c },
+      insertBefore(c, ref) { const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); return c },
+      querySelectorAll() { return [] },
+      remove() {},
+      classList: {
+        add: (c) => cls.add(c), remove: (c) => cls.delete(c),
+        contains: (c) => cls.has(c), toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c) },
+      },
+    }
+    Object.defineProperty(el, 'innerHTML', { get: () => '', set: (v) => { if (v === '') el.children.length = 0 } })
+    return el
+  }
+  ctx.node = (sel) => (nodes[sel] || (nodes[sel] = ctx.mkEl()))
+  ctx.fire = (sel, type) => {
+    const e = { stopPropagation() {}, preventDefault() {}, clientX: 0, clientY: 0 }
+    const list = (ctx.node(sel).handlers[type] || [])
+    if (!list.length) throw new Error(`${sel} に ${type} のハンドラが無い`)
+    return Promise.all(list.map(fn => fn(e)))
+  }
+
+  const factory = new Function('ctx', `
+    'use strict'
+    const TABS_KEY = 'tabs'
+    const PATH_HIST_MAX = 20
+    let CONFIG = ctx.config
+    let tabs = [], activeTab = 0, tabsLoaded = false
+    let tabSwitchBusy = false, tabSwitchPending = null, tabMenuBusy = false
+    let browseRoot = '', currentFile = null, openWaiters = null
+    const openDirs = new Set()
+    const nodeByPath = new Map()
+    const watchKeys = new Set()
+    const { localStorage, bump } = ctx
+    const $ = (sel) => ctx.node(sel)
+    const t = (k) => k
+    // 右クリックメニューは「何が並んだか」だけ覚える（描画はDOMの仕事）。
+    // 項目の中身は実体で組ませる＝並び順も、押した時に何が起きるかも検査できる
+    const showMenu = (e, items) => { ctx.menu = items }
+    const flashTab = (i) => { ctx.flashed = i }
+    const toWslPath = (p) => p
+    const isBroadDir = () => false
+    const toggleWatch = () => bump('toggleWatch')
+    const chooseFolderTab = async () => bump('chooseFolderTab')
+    const navigator = { clipboard: { writeText: (s) => { ctx.copied = s } } }
+    const document = { createElement: () => ctx.mkEl() }
+    let internalDragPath = null
+    const loadChildren = async () => bump('loadChildren')
+    const applyMarks = () => bump('applyMarks')
+    const showToast = () => bump('showToast')
+    const pathBarError = () => bump('pathBarError')
+    const refreshInboxLabel = () => bump('refreshInboxLabel')
+    const leaveEditMode = async () => { bump('leaveEditMode'); return ctx.allowLeave }
+    const openPreview = async (p) => { bump('openPreview'); if (!ctx.previewOk) return false; currentFile = { path: p }; return true }
+    const selectRow = (row) => { ctx.selected = row }
+    // 見た目は描かないが、何をどう描くかは実体（tabLabel）で決めさせる＝
+    // 「反転しているタブ」と「実際に開いているタブ」の食い違いを突き合わせられる
+    const renderTabs = () => { bump('renderTabs'); ctx.drawn = tabs.map((tb, i) => ({ label: tabLabel(tb, i), active: i === activeTab, bad: !!tb.bad })) }
+    // ツリーの読み込み。展開中フォルダのぶんまで索引に載せる（選択の復元が当たるかを見るため）
+    const loadTreeRoot = async () => {
+      bump('loadTreeRoot')
+      nodeByPath.clear()
+      const add = (dir) => {
+        for (const name of (ctx.vfs[dir] || [])) {
+          const p = dir + '\\\\' + name
+          nodeByPath.set(pathKey(p), { _node: { path: p, isDir: !!ctx.vfs[p], row: { path: p } } })
+        }
+      }
+      add(browseRoot)
+      for (const d of openDirs) add(d)
+    }
+    const api = {
+      resolveTarget: async (p) => {
+        bump('resolveTarget')
+        if (ctx.gate) await ctx.gate
+        if (ctx.vfs[p]) return { ok: true, isDir: true, path: p, filePath: null }
+        return { ok: false, error: 'gone' }
+      },
+      listWorktrees: async () => { bump('listWorktrees'); if (ctx.lanesThrow) throw new Error('lane boom'); return ctx.lanes || [] },
+      openPath: (p) => { bump('openPath'); ctx.opened = p },
+      dragStart: () => bump('dragStart'),
+      showInFolder: () => bump('showInFolder'),
+    }
+    ${TAB_FNS.map(grabFn).join('\n')}
+    return {
+      loadTabs, saveTabs, captureTab, activateTab, goHome, stepTab, addTab, pinCurrentTab, closeTab, gotoPath, renderTabs,
+      setupTabs, showCtxMenu, pathHistory, togglePathHist, makeNode,
+      state: () => ({ tabs: tabs.map(tb => ({ path: tb.path, name: tb.name, open: [...tb.open], sel: tb.sel, scroll: tb.scroll, bad: !!tb.bad })),
+        activeTab, browseRoot, openDirs: [...openDirs], currentFile, tabsLoaded, busy: tabSwitchBusy }),
+      expand: (list) => { openDirs.clear(); for (const p of list) openDirs.add(p) },
+      setPreview: (p) => { currentFile = p ? { path: p } : null },
+      // ルートピッカーで止まったまま（＝タブを一度も読み込んでいない）を再現する
+      neverLoaded: () => { tabsLoaded = false; tabs = []; activeTab = 0 },
+    }
+  `)
+  return Object.assign(factory(ctx), { ctx })
+}
+
+async function testTabOps() {
+  const S = (h) => h.state()
+  // 切替が静まるまで待つ。stepTab は（キーハンドラと同じく）activateTab を await しない＝
+  // 呼び出しの Promise を待っただけでは終わっていない。ここを待たずに次を始めると
+  // テスト側の都合で結果が揺れる（実装の是非とは無関係のノイズ）
+  const settle = async (h) => { for (let k = 0; k < 500 && S(h).busy; k++) await new Promise(r => setImmediate(r)) }
+
+  // 1) 起動直後: 1枚目はワークスペース
+  let h = makeTabHarness()
+  h.loadTabs()
+  ok(S(h).tabs.length === 1 && S(h).tabs[0].path === 'C:\\ws', '1枚目がワークスペースになっていない')
+  await h.activateTab(0, { force: true })
+  ok(S(h).browseRoot === 'C:\\ws', 'タブを開いても browseRoot が動いていない')
+
+  // 2) ★「続きから」の退避と復元。ここが captureTab の変異（tb.open = [] 等）を撃墜する
+  await h.addTab('C:\\lane1')
+  ok(S(h).tabs.length === 2 && S(h).activeTab === 1, 'タブの追加でアクティブが移らない')
+  await h.activateTab(0)
+  h.expand(['C:\\ws\\docs', 'C:\\ws\\docs\\deep'])
+  h.setPreview('C:\\ws\\docs\\deep\\d.md')
+  h.ctx.node('#tree').scrollTop = 42
+  await h.activateTab(1)
+  ok(S(h).openDirs.length === 0, 'タブを移った先に前のタブの展開が残っている')
+  ok(S(h).browseRoot === 'C:\\lane1', 'タブを移っても browseRoot が変わらない')
+  await h.activateTab(0)
+  const st = S(h)
+  ok(st.openDirs.length === 2, `戻った時に展開が復元されない (openDirs=${st.openDirs.length})`)
+  ok(st.openDirs.includes('C:\\ws\\docs\\deep'), '深い階層の展開が復元されない')
+  ok(st.currentFile && st.currentFile.path.endsWith('d.md'), '戻った時に選択ファイル（プレビュー）が復元されない')
+  ok(h.ctx.selected && h.ctx.selected.path.endsWith('d.md'), '戻った時に選択行が復元されない')
+  ok(h.ctx.node('#tree').scrollTop === 42, 'スクロール位置が復元されない')
+  const savedOpen = JSON.parse(h.ctx.localStorage.tabs).tabs[0].open
+  ok(savedOpen && savedOpen.length === 2, `展開が保存されていない: ${JSON.stringify(savedOpen)}`)
+
+  // 3) ★閉じた後の添字。閉じたのが自分より前なら、アクティブは1つ手前へずれる
+  await h.addTab('C:\\lane2')
+  ok(S(h).activeTab === 2, '3枚目がアクティブになっていない')
+  await h.closeTab(1)
+  ok(S(h).tabs.length === 2, 'タブを閉じられていない')
+  ok(S(h).activeTab === 1 && S(h).tabs[1].path === 'C:\\lane2', `閉じた後のアクティブがずれている (activeTab=${S(h).activeTab})`)
+  ok(S(h).browseRoot === 'C:\\lane2', '前のタブを閉じただけで表示中のフォルダが変わっている')
+  h.renderTabs()
+  const act = h.ctx.drawn.findIndex(d => d.active)
+  ok(act === 1 && h.ctx.drawn[act].label === 'lane2', `タブバーの反転位置と開いているフォルダが食い違う: ${JSON.stringify(h.ctx.drawn)}`)
+  ok(JSON.parse(h.ctx.localStorage.tabs).active === 1, '閉じた後のアクティブ位置が保存に反映されていない')
+
+  // 4) ★P0-1 の回帰: 未保存のまま閉じて〈いいえ〉を押したら、何も起きていないこと。
+  //    先に splice してから確認する実装だと、タブが減ったまま保存まで済んで復旧できない
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  await h.addTab('C:\\lane2')
+  const before = JSON.stringify(S(h))
+  const savedBefore = h.ctx.localStorage.tabs
+  h.ctx.allowLeave = false
+  await h.closeTab(2)
+  ok(JSON.stringify(S(h)) === before, '破棄確認を取り消したのにタブの状態が変わっている（P0-1）')
+  ok(h.ctx.localStorage.tabs === savedBefore, '破棄確認を取り消したのに保存が書き換わっている（P0-1）')
+  h.ctx.allowLeave = true
+  await h.closeTab(2)
+  ok(S(h).tabs.length === 2 && S(h).activeTab === 1 && S(h).browseRoot === 'C:\\lane1', 'アクティブなタブを閉じた後の行き先が違う')
+
+  // 5) ★P0-2 の回帰: タブを一度も読み込んでいない状態では絶対に保存しない
+  //    （WSLが上がっていない朝＝ルートピッカーで止まったまま閉じると全部消えていた）
+  const keep = h.ctx.localStorage.tabs
+  h.neverLoaded()
+  h.captureTab()
+  h.saveTabs()
+  ok(h.ctx.localStorage.tabs === keep, '未読み込みの状態で保存して前回のタブを消している（P0-2）')
+
+  // 6) 1枚目は閉じられない
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  await h.closeTab(0)
+  ok(S(h).tabs.length === 2, '1枚目（ワークスペース）が閉じられてしまう')
+
+  // 7) 同じフォルダは重複追加せず、そのタブへ
+  await h.activateTab(0)
+  await h.addTab('C:\\lane1')
+  ok(S(h).tabs.length === 2 && S(h).activeTab === 1, '同じフォルダのタブが2枚できる／既存タブへ移らない')
+
+  // 8) 隣へ（Ctrl+Tab）。端は回り込む
+  h.stepTab(1)
+  await new Promise(r => setImmediate(r))
+  ok(S(h).activeTab === 0, `stepTab が回り込まない (activeTab=${S(h).activeTab})`)
+
+  // 9) パス欄ナビはアクティブタブを書き換える（タブは増えない）→ ⌂ で必ずワークスペースへ
+  await h.activateTab(0, { force: true })
+  await h.gotoPath('C:\\ws\\docs')
+  ok(S(h).tabs.length === 2 && S(h).tabs[0].path === 'C:\\ws\\docs', 'パス欄ナビがアクティブタブを書き換えていない')
+  ok(S(h).browseRoot === 'C:\\ws\\docs', 'パス欄ナビで表示が移っていない')
+  await h.goHome()
+  ok(S(h).activeTab === 0 && S(h).browseRoot === 'C:\\ws', '⌂ でワークスペースに戻らない')
+  ok(S(h).tabs[0].path === 'C:\\ws', '⌂ の後も1枚目のパスがワークスペース外のまま')
+
+  // 10) 未保存のまま パス欄ナビ を取り消したら移動しない（移動すると tb.sel が消え、
+  //     ツリーに無いファイルを編集し続ける状態になる）
+  h.ctx.allowLeave = false
+  await h.gotoPath('C:\\lane2')
+  ok(S(h).browseRoot === 'C:\\ws', '破棄確認を取り消したのにパス欄ナビが移動している')
+  h.ctx.allowLeave = true
+
+  // 11) 行き先が消えたタブ: ⚠ を付けて残し、アクティブは動かさない
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  await h.activateTab(0)
+  delete h.ctx.vfs['C:\\lane1']
+  await h.activateTab(1)
+  ok(S(h).tabs.length === 2, '行き先が消えたタブを勝手に消している')
+  ok(S(h).tabs[1].bad === true, '行き先が消えたタブに⚠が付かない')
+  ok(S(h).activeTab === 0 && S(h).browseRoot === 'C:\\ws', '行き先が消えているのにアクティブを移している')
+
+  // 12) 切替の走行中に来た指示を捨てない（Ctrl+Tab連打の1回が無反応にならない）
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  await h.addTab('C:\\lane2')
+  await h.activateTab(0)
+  let release
+  h.ctx.gate = new Promise(r => { release = r })
+  const running = h.activateTab(1)
+  await new Promise(r => setImmediate(r))
+  h.stepTab(1) // 走行中に「隣へ」
+  release()
+  h.ctx.gate = null
+  await running
+  await settle(h)
+  ok(S(h).activeTab === 2, `走行中の「隣へ」が捨てられている (activeTab=${S(h).activeTab})`)
+  ok(S(h).browseRoot === 'C:\\lane2', '最後に指示したタブの中身が出ていない')
+
+  // 走行中に来た「n枚目へ」（タブのクリック・Ctrl+2）も同じく捨てない。
+  // ⚠ stepTab と activateTab で入口が2つある＝両方を踏まないと、片方だけ捨てる実装が素通りする
+  h.ctx.gate = new Promise(r => { release = r })
+  const running2 = h.activateTab(0)
+  await new Promise(r => setImmediate(r))
+  h.activateTab(1) // 走行中の指名
+  release()
+  h.ctx.gate = null
+  await running2
+  await settle(h)
+  ok(S(h).activeTab === 1 && S(h).browseRoot === 'C:\\lane1', `走行中の「n枚目へ」が捨てられている (activeTab=${S(h).activeTab})`)
+
+  // 12.5) ★パス欄の履歴（▾）。タブ＝意図して固定する場所／履歴＝さっき行った場所で別物
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  ok(h.pathHistory().length === 0, 'タブを足しただけで履歴に積まれている')
+  await h.gotoPath('C:\\ws\\docs')
+  await h.gotoPath('C:\\ws\\docs\\deep')
+  ok(JSON.stringify(h.pathHistory()) === JSON.stringify(['C:\\ws\\docs\\deep', 'C:\\ws\\docs']),
+    `パス欄で行った先が新しい順に積まれない: ${JSON.stringify(h.pathHistory())}`)
+  // ★タブの切替では積まない（切り替えるたびに履歴が同じ場所で埋まると履歴の役目が消える）
+  const histBefore = JSON.stringify(h.pathHistory())
+  await h.activateTab(1)
+  await h.activateTab(0)
+  await h.goHome()
+  await settle(h)
+  ok(JSON.stringify(h.pathHistory()) === histBefore, `タブの切替／⌂で履歴が汚れている: ${JSON.stringify(h.pathHistory())}`)
+  // 同じ場所は積み直さず先頭へ（同じ行が並ばない）
+  await h.gotoPath('C:\\ws\\docs')
+  ok(h.pathHistory()[0] === 'C:\\ws\\docs' && h.pathHistory().filter(p => p === 'C:\\ws\\docs').length === 1,
+    `同じ場所が履歴に二重に並ぶ: ${JSON.stringify(h.pathHistory())}`)
+  // 上限20件（パス欄で動くたびに積むので、外すと localStorage が際限なく太る）
+  h.ctx.vfs['C:\\ws\\docs\\deep'] = ['d.md']
+  for (let k = 0; k < 30; k++) {
+    h.ctx.vfs['C:\\many\\f' + k] = []
+    await h.gotoPath('C:\\many\\f' + k)
+  }
+  ok(h.pathHistory().length === 20, `履歴の上限20件が効いていない (${h.pathHistory().length}件)`)
+  ok(h.pathHistory()[0] === 'C:\\many\\f29', '履歴の先頭が最後に行った場所でない')
+  // 壊れた保存データで落ちない（旧 pathHistory と同じ作法）
+  h.ctx.localStorage.pathHistory = '{壊れ'
+  ok(h.pathHistory().length === 0, '壊れた履歴データで空に落ちていない')
+  h.ctx.localStorage.pathHistory = JSON.stringify(['C:\\ws', 42, null, 'C:\\lane1'])
+  ok(h.pathHistory().length === 2, `履歴に文字列以外が混ざっていても弾けていない: ${JSON.stringify(h.pathHistory())}`)
+
+  // ▾ の中身: 履歴の並び＋末尾に「履歴を消す」。🌿レーンは出さない（＋の右クリックに一本化）
+  h.togglePathHist()
+  let box = h.ctx.node('#path-hist')
+  ok(box.classList.contains('show'), '▾ を押しても履歴が開かない')
+  ok(box.children.length === 3, `▾ の項目数が合わない: ${box.children.map(c => c.textContent)}`)
+  ok(!box.children.some(c => c.textContent.includes('🌿')), '履歴に🌿レーンが混ざっている（入口が2つになる）')
+  ok(box.children[2].className === 'hist-clear' && box.children[2].textContent === 'hist.clear', '末尾に「履歴を消す」が無い')
+  // 履歴の行を押すとそこへ飛ぶ
+  await box.children[0].handlers.click[0]()
+  await settle(h)
+  ok(S(h).browseRoot === 'C:\\ws', `履歴の行を押しても移動しない (${S(h).browseRoot})`)
+  ok(!box.classList.contains('show'), '履歴を押した後に閉じていない')
+  // 「履歴を消す」で空になり、次に開くと「履歴はまだありません」
+  h.togglePathHist()
+  box = h.ctx.node('#path-hist')
+  box.children[box.children.length - 1].handlers.click[0]()
+  ok(h.pathHistory().length === 0, '「履歴を消す」で履歴が消えていない')
+  h.togglePathHist()
+  ok(box.children.length === 1 && box.children[0].className === 'hist-empty', '履歴が空の時の表示が出ていない')
+
+  // 12.7) ★ツリー行のダブルクリック。フォルダ＝タブで開く（右クリックメニューと同じ addTab を通す）／
+  //       ファイル＝今までどおり既定のアプリで開く。以前ここでエクスプローラーが開いていたのは不要と明示
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  const dirWrap = h.makeNode({ name: 'docs', isDir: true, path: 'C:\\ws\\docs' }, 0)
+  const dirRow = dirWrap.children[0]
+  ok((dirRow.handlers.dblclick || []).length === 1, 'フォルダ行にダブルクリックが無い')
+  ok((dirRow.handlers.click || []).length === 1, 'フォルダ行のクリック（開閉）が消えている')
+  ok((dirRow.handlers.contextmenu || []).length === 1, 'フォルダ行の右クリックが消えている')
+  h.ctx.opened = null
+  await dirRow.handlers.dblclick[0]()
+  await settle(h)
+  ok(h.ctx.opened === null, 'フォルダのダブルクリックでエクスプローラー（既定のアプリ）に渡している')
+  ok(S(h).tabs.length === 2 && S(h).tabs[1].path === 'C:\\ws\\docs', `フォルダのダブルクリックでタブが増えない: ${JSON.stringify(S(h).tabs.map(x => x.path))}`)
+  ok(S(h).activeTab === 1 && S(h).browseRoot === 'C:\\ws\\docs', 'ダブルクリックで足したタブが開いていない')
+  // ⚠ 単クリックの開閉は生きたまま。ただしダブルクリックの2発目（detail=2）では動かさない
+  //    （「開く→閉じる」が一瞬走ってちらつくため）
+  const dirWrap2 = h.makeNode({ name: 'deep', isDir: true, path: 'C:\\ws\\docs\\deep' }, 1)
+  const dirRow2 = dirWrap2.children[0]
+  await dirRow2.handlers.click[0]({ detail: 1 })
+  ok(S(h).openDirs.includes('C:\\ws\\docs\\deep'), '単クリックでフォルダが開かない')
+  await dirRow2.handlers.click[0]({ detail: 2 })
+  ok(S(h).openDirs.includes('C:\\ws\\docs\\deep'), 'ダブルクリックの2発目で開閉が動いている（ちらつく）')
+  // 既に同じパスのタブがある時は増やさず、そのタブへ移って光らせる（＋と同じ）
+  await h.activateTab(0)
+  h.ctx.flashed = null
+  await dirRow.handlers.dblclick[0]()
+  await settle(h)
+  ok(S(h).tabs.length === 2, '既にタブがあるフォルダをダブルクリックして2枚目ができている')
+  ok(S(h).activeTab === 1 && h.ctx.flashed === 1, '既存タブへ移った合図が出ていない')
+  // ★編集中のガード: 取り消したらタブも表示も動かない
+  h.ctx.allowLeave = false
+  await h.activateTab(0)
+  const beforeDbl = JSON.stringify(S(h))
+  const dirWrap3 = h.makeNode({ name: 'lane1', isDir: true, path: 'C:\\lane1' }, 0)
+  await dirWrap3.children[0].handlers.dblclick[0]()
+  await settle(h)
+  ok(JSON.stringify(S(h)) === beforeDbl, `未保存を取り消したのにダブルクリックでタブ／表示が動いている: ${JSON.stringify(S(h).tabs.map(x => x.path))}`)
+  h.ctx.allowLeave = true
+  // ファイルは従来どおり既定のアプリへ
+  const fileWrap = h.makeNode({ name: 'top.md', isDir: false, path: 'C:\\ws\\top.md' }, 0)
+  const fileRow = fileWrap.children[0]
+  ok((fileRow.handlers.dblclick || []).length === 1, 'ファイル行のダブルクリックが消えている（既定のアプリで開けない）')
+  const tabsBeforeFile = S(h).tabs.length
+  h.ctx.opened = null
+  await fileRow.handlers.dblclick[0]()
+  await settle(h)
+  ok(h.ctx.opened === 'C:\\ws\\top.md', 'ファイルのダブルクリックで既定のアプリに渡していない')
+  ok(S(h).tabs.length === tabsBeforeFile, 'ファイルのダブルクリックでタブが増えている（フォルダと取り違えている）')
+
+  // 13) ★タブの増やし方（本田さんが実機で見つけられなかった動線）
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  h.setupTabs()
+  // 左クリック＝今見ているフォルダが即タブになる（メニューを開かない）
+  await h.gotoPath('C:\\ws\\docs')
+  await h.ctx.fire('#btn-tab-add', 'click')
+  await settle(h)
+  ok(h.ctx.menu === undefined, '＋の左クリックでメニューが開いている（即追加になっていない）')
+  ok(S(h).tabs.length === 2 && S(h).tabs[1].path === 'C:\\ws\\docs', `＋の左クリックでタブが増えない: ${JSON.stringify(S(h).tabs.map(x => x.path))}`)
+  ok(S(h).activeTab === 1, '＋で足したタブがアクティブになっていない')
+  // ⚠ browseRoot は常にアクティブタブのパスと一致する（パス欄ナビがアクティブタブを書き換えるため）。
+  //    ここで「今のタブ」まで重複判定に入れると、＋は永久に1枚も増やさない無反応ボタンになる
+  ok(S(h).tabs[0].path === S(h).tabs[1].path, '前提: ＋を押した時点で今のタブと同じ場所だった')
+  // 他所に同じ場所のタブがある時は増やさず、そこへ移って光らせる（何も起きないように見せない）
+  h.ctx.flashed = null
+  await h.ctx.fire('#btn-tab-add', 'click')
+  await settle(h)
+  ok(S(h).tabs.length === 2, '同じ場所のタブが他にあるのに3枚目ができている')
+  ok(S(h).activeTab === 0, '同じ場所の既存タブへ移っていない')
+  ok(h.ctx.flashed === 0, '既存タブへ移った時の合図（ハイライト）が出ていない＝押しても何も起きないように見える')
+
+  // 右クリック＝従来の追加メニュー（レーン一覧／今のフォルダ／フォルダを選ぶ）は残っている
+  h.ctx.lanes = [{ name: 'ws-lane1', path: 'C:\\lane1' }]
+  await h.ctx.fire('#btn-tab-add', 'contextmenu')
+  await settle(h)
+  let labels = (h.ctx.menu || []).map(it => it[0])
+  ok(labels.includes('tab.lanes') && labels.includes('tab.addCurrent') && labels.includes('tab.addFolder'),
+    `＋の右クリックメニューの項目が足りない: ${JSON.stringify(labels)}`)
+  const laneItem = h.ctx.menu.find(it => it[0].includes('ws-lane1'))
+  ok(!!laneItem, 'レーンがメニューに出ていない')
+  await laneItem[1]()
+  await settle(h)
+  ok(S(h).tabs.length === 3 && S(h).tabs[2].path === 'C:\\lane1', 'メニューのレーンを押してもタブが増えない')
+  // レーン検出が転んでも他の項目は出す（レーンはおまけ）
+  h.ctx.menu = undefined
+  h.ctx.lanesThrow = true
+  await h.ctx.fire('#btn-tab-add', 'contextmenu')
+  await settle(h)
+  labels = (h.ctx.menu || []).map(it => it[0])
+  ok(labels.includes('tab.addCurrent') && labels.includes('tab.addFolder'), 'レーン検出が失敗すると他の追加方法まで消える')
+  h.ctx.lanesThrow = false
+
+  // 14) ★ツリーのフォルダ右クリック →「タブで開く」（本命の動線）
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  h.showCtxMenu({ preventDefault() {} }, { path: 'C:\\ws\\docs', name: 'docs', isDir: true })
+  ok(h.ctx.menu[0][0] === 'ctx.openInTab', `フォルダの右クリックに「タブで開く」が無い／先頭でない: ${JSON.stringify(h.ctx.menu.map(x => x[0]))}`)
+  await h.ctx.menu[0][1]()
+  await settle(h)
+  ok(S(h).tabs.length === 2 && S(h).tabs[1].path === 'C:\\ws\\docs', 'ツリーの右クリックからタブを足せない')
+  ok(S(h).activeTab === 1 && S(h).browseRoot === 'C:\\ws\\docs', 'ツリーから足したタブがアクティブになっていない')
+  h.showCtxMenu({ preventDefault() {} }, { path: 'C:\\ws\\top.md', name: 'top.md', isDir: false })
+  ok(!h.ctx.menu.some(it => it[0] === 'ctx.openInTab'), 'ファイル行にも「タブで開く」が出ている')
+  // 同じフォルダをもう一度「タブで開く」＝増やさずそのタブへ。増えないので合図が要る
+  await h.activateTab(0)
+  h.ctx.flashed = null
+  h.showCtxMenu({ preventDefault() {} }, { path: 'C:\\ws\\docs', name: 'docs', isDir: true })
+  await h.ctx.menu[0][1]()
+  await settle(h)
+  ok(S(h).tabs.length === 2, '既にタブがあるフォルダで2枚目ができている')
+  ok(S(h).activeTab === 1, '既存のタブへ移っていない')
+  ok(h.ctx.flashed === 1, '既にタブがある時の合図（ハイライト）が出ていない＝押しても何も起きないように見える')
+
+  // 15) 新しい入口からでも編集中のガードは効く（addTab → activateTab → leaveEditMode）
+  h.ctx.allowLeave = false
+  const beforeGuard = JSON.stringify(S(h))
+  h.showCtxMenu({ preventDefault() {} }, { path: 'C:\\lane1', name: 'lane1', isDir: true })
+  await h.ctx.menu[0][1]()
+  await settle(h)
+  ok(S(h).browseRoot === 'C:\\ws\\docs', '未保存を取り消したのにツリーが移動している（新しい入口でガードが抜けている）')
+  // ⚠ タブだけ増えて切り替わらない、も不合格。確認はタブを足す前に出す（閉じる時と同じ）
+  ok(JSON.stringify(S(h)) === beforeGuard, `未保存を取り消したのにタブの状態が変わっている: ${JSON.stringify(S(h).tabs.map(x => x.path))}`)
+  h.ctx.allowLeave = true
+
+  h = makeTabHarness()
+  h.loadTabs()
+  await h.activateTab(0, { force: true })
+  await h.addTab('C:\\lane1')
+  await h.addTab('C:\\lane2')
+  await h.activateTab(2)
+  await settle(h)
+
+  // 切替の走行中は閉じない。走行中に配列をいじると、進行中の切替が別のタブを開き終えた後に
+  // 添字だけズレて残る＝タブバーの反転位置とツリーの中身が食い違ったまま保存される
+  await h.activateTab(2)
+  await settle(h)
+  h.ctx.gate = new Promise(r => { release = r })
+  const running3 = h.activateTab(0)
+  await new Promise(r => setImmediate(r))
+  h.closeTab(2) // 走行中に「タブを閉じる」
+  release()
+  h.ctx.gate = null
+  await running3
+  await settle(h)
+  ok(S(h).tabs.length === 3, `切替の走行中にタブを閉じてしまう (tabs=${S(h).tabs.length})`)
+  ok(S(h).activeTab === 0 && S(h).browseRoot === 'C:\\ws', `走行中に閉じた後の表示と反転位置が食い違う (activeTab=${S(h).activeTab}, browseRoot=${S(h).browseRoot})`)
 }
 
 async function testPollLoop() {
@@ -563,6 +1135,7 @@ async function testPreviewGuard() {
 
   testTreeDiff()
   await testStartupPaths()
+  await testTabOps()
   await testPollLoop()
   await testPreviewGuard()
 
@@ -570,7 +1143,7 @@ async function testPreviewGuard() {
   fs.rmSync(USER, { recursive: true, force: true })
   if (failed) { console.error(`  自動更新／新着ウォッチのテスト: ${failed}件 失敗`); process.exit(1) }
   // 観点数は数えて出す（手で書くと足しても増えない＝数字だけ嘘になる）
-  console.log(`  自動更新／新着ウォッチ OK (${checks}観点: main のIPC実叩き／renderer の起動経路・ポーリング層／ツリー差分)`)
+  console.log(`  自動更新／新着ウォッチ OK (${checks}観点: main のIPC実叩き／renderer の起動経路・ポーリング層／タブ操作／ツリー差分)`)
   // 未読の遅延書き込みタイマーが残っていると、片付けた後に発火して
   // 「未読の保存に失敗: ENOENT」が毎回出る（テストの合否とは無関係のノイズ）
   process.exit(0)
