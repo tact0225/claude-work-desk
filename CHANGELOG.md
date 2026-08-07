@@ -2,6 +2,39 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.9.0
+
+**You can see what the agent changed. No more re-reading the whole article.**
+
+### Diff (since you opened it)
+
+- The preview header has a **Diff** button. It lays out, in one column, only the lines that changed **between the moment you opened the file and now** — deletions in red, additions in green.
+- The baseline is **pinned at the moment you opened the file**. Auto-refresh re-reads the file but never moves it, so if the agent rewrote the file five times, all five passes show up **in one screen**. A diff that only covers the last write would leave you tracking the changes yourself, which is the problem this feature exists to remove.
+- **Reopening the same file never moves the baseline.** Clicking the row again, double-clicking it to hand the file to your editor (a double-click fires two clicks first), stepping away with `←` and coming back, clicking a row in the drop feed — all of them go through "open". Re-taking the baseline there means that the moment you see the `●` and reach for your editor, the changes you had not read yet are gone with no way back. The guard sits inside "open" itself rather than at the four call sites, because a fifth call site would otherwise arrive unguarded.
+- Unchanged runs collapse to `… N unchanged lines …`, keeping 3 lines of context on each side. The point is to read the changes, not the article.
+- The Diff button carries a `●` whenever something changed, so you notice without pressing it (same convention as the unread marks in the tree).
+- **Reviewed** advances the baseline to the current content and closes the diff. From then on, the diff runs from that moment. It is also the way out when the rewrite was too large to diff: move the baseline to now, and the next rewrite diffs again.
+- Your own saves in write mode are folded into the baseline — your edits mixing into the agent's would defeat the purpose. But if the `●` is lit when you enter write mode, you get **one confirmation first**: saving from there would carry changes you never looked at into the baseline, out of reach forever.
+- Markdown and code only (not images, PDFs, or docx), and **never in write mode** — the collision between your unsaved buffer and an external change is handled carefully elsewhere, and a diff view has no business in the middle of it. Entering write mode from the diff closes the diff. So does a file growing past 4 MB while the diff is open (otherwise the diff view springs back on its own once the file shrinks again).
+- If the agent reverts its edits while you are looking at the diff, the view **drops back to the file**. Being stranded on a "nothing changed" screen means pressing the button again just to read the article, which reads as broken. It is not a silent drop, though: a toast in the corner says so once.
+- **A difference of trailing blank lines alone is treated as noise and never lights the `●`.** A formatter or editor adding or removing the final newline would otherwise produce one red line with no characters in it — routine wear in day-to-day writing. Only the trailing run is dropped: blank lines inside the text (a paragraph split or joined) still show up as they did.
+- A blank line added or removed inside the text renders as `(blank line)`. A bare red or green band tells you nothing about what happened.
+
+### Implementation
+
+- The diff is a line-level LCS written by hand — **no new dependency**. The target is long-form Japanese Markdown, where line granularity is enough (no word-level highlighting).
+- Matching prefixes and suffixes are trimmed before the LCS runs, so editing part of an article shrinks the comparison to the part that actually differs.
+- There is a size guard. A naive LCS is O(N×M) in both time and memory, so if the trimmed line counts multiply out past **4,000,000 cells** (about 16 MB as an Int32Array) the computation is skipped and the view says the change is too large to display. Freezing silently would be the worst outcome.
+- File contents are always escaped before rendering — HTML inside a note never reaches the DOM as markup.
+
+### Checks
+
+- Added `test-diff.js`, run from `check.sh` on every pass. It covers no-change / additions only / deletions only / replacement / insertion at the top / append at the end, the boundaries of the collapse, the size guard firing, empty-file round trips, and line-ending normalization — plus a structural assertion that **the auto-refresh path never touches the baseline** (if that slips, the diff still renders and still looks fine, it just quietly shows one pass instead of all of them).
+- The fixes above are regression-tested too: that opening the same file twice in a row leaves the baseline alone (while stepping away and back re-takes it, and a Windows case-only path difference still counts as the same file), that trailing blank lines alone never light the `●`, that **blank lines inside the text still show up in the diff** (the guarantee that the noise filter did not cut too deep), and that the diff view folds itself away when the file stops being editable or the difference disappears.
+- The thresholds are **checked against the documentation** as well (`check.sh` step 9). `DIFF_CONTEXT` and `DIFF_MAX_CELLS` are copied by hand into the README and the changelog, and the tests read them from the source, so nothing notices when changing the context width turns the README into a quiet lie. Rot in prose does not show up by running the app, so the numbers are pulled out of the source and matched against all six places; a mismatch fails the build before it ships.
+
+---
+
 ## v0.8.0
 
 **There are installers now. No terminal required, on Windows and macOS alike.**

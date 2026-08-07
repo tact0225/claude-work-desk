@@ -544,6 +544,15 @@ async function openPreview(p) {
   currentFile = res
   previewMtime = res.mtimeMs
   externalChange = false
+  // ⚠ 差分の基準を取り直すのはここだけ。refreshPreview（＝レナードの書き換えを検知して
+  //    読み直す経路）では絶対に動かさない。動かすと「1回ぶんの書き換え」しか見えなくなり、
+  //    5回書き換えられた記事の「開いた時 → 今」がまとめて見えるという機能の肝が消える。
+  // ⚠ そして openPreview は「もう開いているファイルをもう一度開く」時にも走る
+  //    （ツリーの同じ行を再クリック／ダブルクリックで外部エディタ＝click が先に2発飛ぶ／
+  //      ← で離れて戻る／受領フィードの行）。ここで無条件に取り直すと、その瞬間に
+  //    「まだ見ていない書き換え」が復元不能で消える。同じパスの基準を既に持っているなら据え置く。
+  if (!shouldKeepDiffBase(res)) setDiffBase(res)
+  diffMode = false // 別のファイルに移ったら差分ビューは畳む（前のファイルの基準で開いたままにしない）
   renderPreview(res)
   // 開いた＝読んだ、とみなして未読を落とす。印が消えるのを待たずに先に描き替える
   // （IPCの往復ぶん色が残ると「クリックしたのに消えない」と見える）
@@ -561,6 +570,10 @@ function goBack() {
 }
 
 function renderPreview(res) {
+  // ⚠ 差分は editable なファイルだけの道具。差分ビューを開いたまま 4MB を超えて育つと
+  //    isEditable が false になり差分ボタンごと消えるが、diffMode を true のまま残すと
+  //    ファイルが縮んで editable に戻った瞬間に「押していない差分ビュー」が復活する。
+  if (!isEditable(res)) diffMode = false
   updatePreviewTitle(res)
   const actions = $('#preview-actions')
   actions.innerHTML = ''
@@ -571,13 +584,28 @@ function renderPreview(res) {
     btnBack.onclick = goBack
     actions.appendChild(btnBack)
   }
-  if (res.kind === 'markdown' && !editMode) {
+  // 差分ビュー中はレンダ/ソースの切替を出さない。押しても差分の見た目は変わらない＝
+  // 「押しても何も起きないボタン」になるので、その間は引っ込める。
+  if (res.kind === 'markdown' && !editMode && !diffMode) {
     const btn = document.createElement('button')
     btn.textContent = mdMode === 'rendered' ? t('btn.source') : t('btn.rendered')
     btn.onclick = () => { mdMode = mdMode === 'rendered' ? 'source' : 'rendered'; renderPreview(res) }
     actions.appendChild(btn)
   }
   if (isEditable(res)) {
+    // 差分は「読んでいる時」だけの道具。入力モード中は出さない＝編集中バッファと外部変更の
+    // 衝突は refreshPreview 側で慎重に扱っている領域で、そこに差分を持ち込まない。
+    if (!editMode) {
+      const changed = hasDiff(res)
+      const btnDiff = document.createElement('button')
+      // 押さなくても「何か変わった」と分かるように印を出す（ツリーの未読 ● と同じ作法）
+      btnDiff.textContent = t('btn.diff') + (changed ? ' ●' : '')
+      btnDiff.classList.toggle('changed', changed)
+      if (diffMode) btnDiff.classList.add('toggled')
+      btnDiff.title = diffMode ? t('tip.diffOff') : t('tip.diffOn')
+      btnDiff.onclick = () => { diffMode = !diffMode; renderPreview(res) }
+      actions.appendChild(btnDiff)
+    }
     if (editMode) {
       // Undo/Redo は入力モードの時だけ出す（読むだけの時は不要なので置かない）
       const btnUndo = editToolButton('↶', t('tip.undo'), () => runEditCmd('undo'))
@@ -607,7 +635,18 @@ function renderPreview(res) {
   actions.append(btnExp, btnOpen)
 
   const body = $('#preview-body')
+  // ⚠ 入力モードの分岐を先に置く。順序を入れ替えると差分ビューが編集欄を押しのけ、
+  //    書きかけの内容が画面から消える（入力中は差分を出さない、が仕様）
   if (editMode && isEditable(res)) { renderEditor(res); return }
+  if (diffMode && isEditable(res)) {
+    if (renderDiff(res)) return
+    // 見るものが無い（レナードが編集を巻き戻した等）＝差分ビューに取り残さず本文へ戻す。
+    // ⚠ 無言で戻すと「押したのに何も起きない」に見えるので、トーストで1回だけ知らせる。
+    diffMode = false
+    showToast(t('diff.none'), 2000)
+    renderPreview(res) // ボタン列も差分ビュー前提で組んであるので組み直す（diffMode が false なので再帰しない）
+    return
+  }
   switch (res.kind) {
     case 'markdown':
       if (mdMode === 'rendered') { body.innerHTML = `<div class="md-body">${res.html}</div>`; addCopyButtons(body); enhanceTables(body) }
@@ -707,8 +746,13 @@ function renderEditor(res) {
 
 function toggleEdit() {
   if (editMode) { leaveEditMode().then(ok => { if (ok) renderPreview(currentFile) }); return }
+  // ⚠ ● が点いている＝まだ見ていないレナードの書き換えがある。このまま入力モードに入って
+  //    保存すると saveEdit の setDiffBase が「見ていない変更」ごと基準を進め、二度と差分として
+  //    見られなくなる。仕様（自分の保存は基準を進める）は変えず、入口で1回だけ訊く。
+  if (hasDiff(currentFile) && !confirm(t('confirm.editWithDiff'))) return
   editMode = true
   editDirty = false
+  diffMode = false // 差分ビューから入力モードに入ったら差分は閉じる（入力中は出さない）
   renderPreview(currentFile)
 }
 
@@ -745,6 +789,9 @@ async function saveEdit() {
   //    「外部で書き換わった」と誤検知して ⚠ を出す（自分の書き込みなのに）
   previewMtime = currentFile.mtimeMs != null ? currentFile.mtimeMs : previewMtime
   externalChange = false
+  // 自分が入力モードで書いた変更は「自分がやった変更」＝基準を保存後の内容へ進める。
+  // 混ざると「レナードがどこを直したか」を見たいという差分の目的が濁る（本田さん明示）
+  setDiffBase(currentFile)
   refreshDirty() // 保存中に打ち続けていた場合は ● が残る
   updatePreviewTitle()
   const btn = $('#btn-save')
@@ -753,6 +800,233 @@ async function saveEdit() {
     btn.classList.add('saved')
     setTimeout(() => { if ($('#btn-save') === btn) { btn.textContent = t('btn.save'); btn.classList.remove('saved') } }, 1600)
   }
+}
+
+// ---------- 差分（開いた時点 → 今） ----------
+// レナードがファイルを書き換えると refreshPreview が黙って読み直す。読み直した後に
+// 「どこが変わったのか」を、記事を頭から読み直さずに確かめるための機能。
+// ⚠ 基準（ベースライン）は「開いた時点」で固定する。自動更新では動かさない＝
+//    5回書き換えられても「開いた時 → 今」がまとめて1画面で見える（ここが機能の肝）。
+
+// 変更行の前後に残す無変更行の数。長い記事で「変更点だけ確認する」のが目的なので、
+// 無変更行を全部出したら意味がない。3行あれば「どの段落の話か」は分かる。
+const DIFF_CONTEXT = 3
+
+// LCS の計算量ガード。素朴なLCSは O(N×M)＝行数の積ぶんのセルを持つので、
+// 全面書き換えのような入力でメモリと時間が一気に膨らむ（＝Deskが固まる）。
+// 4,000,000セル ＝ Int32Array で約16MB・二重ループ400万回で、遅いPCでも
+// 「一瞬待つ」で収まる上限として置いた。日本語Markdownの記事は数百〜2000行、
+// しかも下の前後トリムで「本当に違う範囲」まで縮んでから測るので、通常運用では届かない。
+// 超えたら計算せずに打ち切って「大きすぎる」と出す（黙って固まるのが一番困る）。
+const DIFF_MAX_CELLS = 4000000
+
+// 差分の基準。ファイルパス単位で1つだけ持つ（別ファイルを開けばそのファイルの基準になる）
+let diffBase = null   // { key: pathKey(path), text: 開いた/確認済みにした時点の中身 }
+let diffMode = false  // 差分ビューを出しているか
+
+// ⚠ 改行コードは揃えてから比べる。CRLF↔LF の違いだけで全行が「変わった」と出ると、
+//    変更点だけ見るという目的が丸ごと壊れる（Windows側で編集したファイルで実際に踏む）
+// ⚠ 末尾の空行（＝末尾改行と、その後ろの空白だけの行）も落としてから比べる。整形ツールや
+//    エディタが末尾改行を足し引きしただけで ● が点き、開くと「文字が1つも無い赤い行」が
+//    1本出る（'a\nb\n' → 'a\nb' が -1 になる）。日本語記事の運用で普通に踏むノイズ。
+//    落とすのは末尾だけ＝本文中の空行の増減（段落を割った／繋いだ）は今までどおり差分に出る。
+function diffNormalize(text) {
+  const s = String(text == null ? '' : text).replace(/\r\n?/g, '\n')
+  // ⚠ 末尾を落とすのは正規表現でなく後ろからの走査でやる。`(\n[ \t]*)+$` は、途中に空行が
+  //    延々と続くファイルでバックトラックが二乗に膨らむ（＝Deskが固まる。差分にサイズガードを
+  //    置いたのと同じ理由で、入力の形で固まる経路は残さない）。ここは常に1回なめるだけ。
+  let end = s.length
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i]
+    if (c === '\n') { end = i; continue }   // 改行の手前まで戻す
+    if (c === ' ' || c === '\t') continue   // 空白だけの行も「空行」として飛ばす
+    break                                   // 中身のある行に当たった＝ここまでは残す
+  }
+  return s.slice(0, end)
+}
+
+// 空ファイルは「空行が1行ある」ではなく「0行」として扱う。'' を split すると [''] になり、
+// 空 → 内容あり が「空行の削除」から始まって読みにくくなる。
+function diffLines(text) {
+  const s = diffNormalize(text)
+  return s === '' ? [] : s.split('\n')
+}
+
+function setDiffBase(res) {
+  diffBase = isEditable(res) ? { key: pathKey(res.path), text: diffNormalize(res.source) } : null
+}
+
+// 「同じパスの基準を既に持っている」＝取り直してはいけない。openPreview は同じファイルに
+// 対して何度でも走る（再クリック・ダブルクリック・← で戻る・受領フィード）ので、その全部を
+// 呼び出し側で見張るのは無理＝ここ1箇所で塞ぐ。
+// ⚠ 別のファイルを開けば diffBase はそちらに移る＝離れて戻ってきた時は取り直しになる
+//    （「同じパスを連続で開いた時だけ据え置く」が正しい挙動）。
+function shouldKeepDiffBase(res) {
+  return !!diffBase && !!res && diffBase.key === pathKey(res.path)
+}
+
+// 今の版が基準から動いているか。文字列の比較1回で済む＝ポーリングのたびに差分を
+// 組み直す必要はない（●を出すかどうかの判定だけならこれで足りる）。
+function hasDiff(res) {
+  if (!diffBase || !isEditable(res) || diffBase.key !== pathKey(res.path)) return false
+  return diffBase.text !== diffNormalize(res.source)
+}
+
+// 行単位の LCS。依存パッケージを増やさない方針なので自前で持つ。
+// 返り値は { kind: 'same'|'del'|'add', text } の並び。
+function lcsOps(a, b) {
+  const n = a.length
+  const m = b.length
+  // L[i][j] = a[i..] と b[j..] の最長共通部分列の長さ。(n+1)×(m+1) を1本の配列に畳んで持つ
+  // （二次元配列だと行ごとのオブジェクトが増えてGCが効き、同じ計算量でも体感が落ちる）
+  const w = m + 1
+  const L = new Int32Array((n + 1) * w)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      L[i * w + j] = a[i] === b[j]
+        ? L[(i + 1) * w + j + 1] + 1
+        : Math.max(L[(i + 1) * w + j], L[i * w + j + 1])
+    }
+  }
+  const ops = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push({ kind: 'same', text: a[i] }); i++; j++ }
+    // ⚠ 同点の時は削除を先に出す。追加を先に出すと箇所ごとに「赤→緑」「緑→赤」が
+    //    入り混じり、「消えた行の下に書き直された行がある」という読み方が崩れる
+    else if (L[(i + 1) * w + j] >= L[i * w + j + 1]) { ops.push({ kind: 'del', text: a[i] }); i++ }
+    else { ops.push({ kind: 'add', text: b[j] }); j++ }
+  }
+  while (i < n) { ops.push({ kind: 'del', text: a[i] }); i++ }
+  while (j < m) { ops.push({ kind: 'add', text: b[j] }); j++ }
+  return ops
+}
+
+// 無変更行の連なりを前後 ctx 行だけ残して畳む。畳んだぶんは { kind:'gap', count } にする。
+// ⚠ 隠す行が1行だけなら畳まない。「… 1行省略 …」の行で1行使う＝表示行数が減らないうえ、
+//    読み手は隠された1行が何かを確かめられない（損しかしない畳み方）。
+function collapseSame(ops, ctx) {
+  const rows = []
+  let i = 0
+  while (i < ops.length) {
+    if (ops[i].kind !== 'same') { rows.push(ops[i]); i++; continue }
+    let j = i
+    while (j < ops.length && ops[j].kind === 'same') j++
+    const run = ops.slice(i, j)
+    // 先頭・末尾の無変更（＝変更の外側）は、変更に面していない側のコンテキストを残さない
+    const keepBefore = i === 0 ? 0 : ctx
+    const keepAfter = j === ops.length ? 0 : ctx
+    const hidden = run.length - keepBefore - keepAfter
+    if (hidden <= 1) {
+      for (const op of run) rows.push(op)
+    } else {
+      for (let k = 0; k < keepBefore; k++) rows.push(run[k])
+      rows.push({ kind: 'gap', count: hidden })
+      for (let k = run.length - keepAfter; k < run.length; k++) rows.push(run[k])
+    }
+    i = j
+  }
+  return rows
+}
+
+// 基準 → 今 の差分を組む。
+// 返り値: { ok: true, rows, added, removed } / { ok: false, reason: 'toobig' }
+function buildDiff(oldText, newText, context) {
+  const ctx = context == null ? DIFF_CONTEXT : context
+  const a = diffLines(oldText)
+  const b = diffLines(newText)
+
+  // 先頭・末尾の一致部分は LCS に渡す前に落とす。記事の一部だけ直された時に、
+  // 実際に比べる行数が「違う範囲」まで縮む＝サイズガードに当たらずに済む一番効く前処理。
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head &&
+         a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+
+  const midA = a.slice(head, a.length - tail)
+  const midB = b.slice(head, b.length - tail)
+  if (!midA.length && !midB.length) return { ok: true, rows: [], added: 0, removed: 0 }
+  // ⚠ ガードは前後トリムの「後」で測る。ここが本当に計算するセル数で、
+  //    先に測ると「1行だけ直した10万行のファイル」まで断ってしまう
+  if ((midA.length + 1) * (midB.length + 1) > DIFF_MAX_CELLS) return { ok: false, reason: 'toobig' }
+
+  const ops = []
+  for (let i = 0; i < head; i++) ops.push({ kind: 'same', text: a[i] })
+  for (const op of lcsOps(midA, midB)) ops.push(op)
+  for (let i = a.length - tail; i < a.length; i++) ops.push({ kind: 'same', text: a[i] })
+
+  let added = 0
+  let removed = 0
+  for (const op of ops) {
+    if (op.kind === 'add') added++
+    else if (op.kind === 'del') removed++
+  }
+  return { ok: true, rows: collapseSame(ops, ctx), added, removed }
+}
+
+// 「確認済み」＝ここまでは見た。基準を今の内容に進めて通常プレビューへ戻す。
+// 以後は「確認済みを押した時点 → 今」の差分になる。
+function ackDiff() {
+  setDiffBase(currentFile)
+  diffMode = false
+  renderPreview(currentFile)
+}
+
+// 差分ビューを描く。描いたら true、見るものが無くて描かなかったら false を返す
+// （false の時に本文へ戻すのは呼び出し側＝renderPreview の仕事。ここで renderPreview を
+//   呼び返すと、描画の入口が2つになって追えなくなる）。
+function renderDiff(res) {
+  const body = $('#preview-body')
+  // 基準が無い（別ファイルの基準しか無い等）ときは自分自身と比べる＝「変更なし」扱い。
+  // ここで落ちると差分ボタンが無反応に見えるので、必ず判断してから返す。
+  const base = diffBase && diffBase.key === pathKey(res.path) ? diffBase.text : res.source
+  const d = buildDiff(base, res.source)
+  // 変更が無い＝「変更はありません」の画面に取り残さない。差分表示中にレナードが編集を
+  // 巻き戻すとここに来る（本文に戻るのにもう一度ボタンを押させるのは「壊れた?」に見える）
+  if (d.ok && !d.rows.length) return false
+
+  let stat = ''
+  let inner
+  if (!d.ok) {
+    // ⚠ ここから抜ける唯一の道は「確認済み」で基準を今に進めること。だから打ち切った時も
+    //    差分ビューは畳まず、確認済みボタンを出したまま理由を出す。
+    inner = `<div class="diff-note">${escapeHtml(t('diff.toobig'))}</div>`
+  } else {
+    stat = t('diff.stat', { add: d.added, del: d.removed })
+    const parts = []
+    for (const row of d.rows) {
+      if (row.kind === 'gap') {
+        parts.push(`<div class="dline gap">${escapeHtml(t('diff.gap', { n: row.count }))}</div>`)
+        continue
+      }
+      const sign = row.kind === 'add' ? '+' : (row.kind === 'del' ? '−' : ' ')
+      // 空行の増減は「赤／緑の無地の帯が1本出る」だけになり、何が起きたのか読めない。
+      // 文字を置いて「空行が消えた／増えた」と分かる形にする（本文中の空行は意味のある変更）
+      const blank = row.text === ''
+      const text = blank ? t('diff.blank') : row.text
+      // ⚠ ファイル本文は必ず escapeHtml を通す。素通しにすると Markdown 中のHTMLが
+      //    そのまま描画され、差分の見た目が崩れる（＋任意のタグを差し込める経路になる）
+      parts.push(`<div class="dline ${row.kind}${blank ? ' blank' : ''}"><span class="dsign">${sign}</span><span class="dtext">${escapeHtml(text)}</span></div>`)
+    }
+    inner = parts.join('')
+  }
+
+  body.innerHTML = `<div class="diffwrap">
+      <div class="diff-head">
+        <span class="diff-stat">${escapeHtml(stat)}</span>
+        <button class="diff-ack"></button>
+      </div>
+      <div class="diff-body">${inner}</div>
+    </div>`
+  // ⚠ ボタンの文言と title は属性に埋め込まず、要素に対して入れる。escapeHtml は
+  //    引用符を潰さないので、翻訳に " が混ざった言語を足した瞬間に属性が壊れる
+  const ack = body.querySelector('.diff-ack')
+  ack.textContent = t('btn.diffAck')
+  ack.title = t('tip.diffAck')
+  ack.addEventListener('click', ackDiff)
+  return true
 }
 
 // レンダリング表示のコードブロックにホバーで出る「コピー」ボタンを付ける
@@ -1204,11 +1478,17 @@ function setZoomTo(factor) {
   const pct = Math.round(zoom * 100)
   $('#set-zoom').value = pct
   $('#zoom-val').textContent = pct + '%'
+  showToast(pct + '%')
+}
+
+// 右上に一瞬出す通知。ズーム倍率の表示に使っていた仕掛けを、文字を出すだけの汎用に広げた
+// （要素は使い回す＝同時に2つ出す用途は無い。後から出したものが前のを上書きする）
+function showToast(msg, ms) {
   const toast = $('#zoom-toast')
-  toast.textContent = pct + '%'
+  toast.textContent = msg
   toast.classList.add('show')
   clearTimeout(zoomToastTimer)
-  zoomToastTimer = setTimeout(() => toast.classList.remove('show'), 900)
+  zoomToastTimer = setTimeout(() => toast.classList.remove('show'), ms || 900)
 }
 
 // ---------- フォント設定（localStorage優先、config.jsonが下地） ----------

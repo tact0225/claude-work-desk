@@ -73,5 +73,44 @@ else
   note "既定フォントのチェーン一致 (css :root == app.js FALLBACK_*)"
 fi
 
+# 8) 差分ビュー（開いた時点 → 今）
+#    ※ 番号は追記式にする。renderer/app.js のコメントが「check.sh 7)」を名指ししているので、
+#      既存の番号は動かさない（動かした瞬間に、直しようのない嘘の参照になる）。
+#    壊れ方が静か（基準が毎回進んで1回ぶんしか見えない／無変更行を畳めていない／
+#    巨大な書き換えで固まる）で目では気づけないので、動線に埋め込んで毎回回す
+node test-diff.js || fail "差分（開いた時点 → 今）のロジックが壊れている"
+
+# 9) 差分のしきい値が README / CHANGELOG に書いた数字と一致しているか
+#    （DIFF_CONTEXT と DIFF_MAX_CELLS はドキュメント側に手で書き写されている。test-diff.js は
+#      本体から読むので気づかないが、DIFF_CONTEXT を 4 にした瞬間に README が静かに嘘になる。
+#      ドキュメントの腐りは実行しても分からない＝ここで突合する）
+#    （ここも -P を使わない。理由は 2) と同じ）
+group3() { # 4000000 → 4,000,000（ドキュメントは桁区切りで書いてある）
+  local n=$1 out=""
+  while [ ${#n} -gt 3 ]; do out=",${n: -3}$out"; n=${n:0:${#n}-3}; done
+  echo "$n$out"
+}
+DIFF_CTX=$(grep -m1 -E '^const DIFF_CONTEXT = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_CONTEXT = ([0-9]+).*/\1/')
+DIFF_CELLS=$(grep -m1 -E '^const DIFF_MAX_CELLS = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_MAX_CELLS = ([0-9]+).*/\1/')
+DOC_STALE=""
+doc_has() { grep -qF "$2" "$1" || DOC_STALE="$DOC_STALE
+      $1 に「$2」が無い"; }
+if [ -z "$DIFF_CTX" ] || [ -z "$DIFF_CELLS" ]; then
+  fail "renderer/app.js から DIFF_CONTEXT / DIFF_MAX_CELLS を読めません（定数を改名したら check.sh 9) も直す）"
+else
+  DIFF_CELLS_H=$(group3 "$DIFF_CELLS")
+  doc_has README.ja.md    "前後${DIFF_CTX}行"
+  doc_has README.md       "${DIFF_CTX} lines of context"
+  doc_has CHANGELOG.ja.md "前後${DIFF_CTX}行"
+  doc_has CHANGELOG.md    "${DIFF_CTX} lines of context"
+  doc_has CHANGELOG.ja.md "${DIFF_CELLS_H}セル"
+  doc_has CHANGELOG.md    "${DIFF_CELLS_H} cells"
+  if [ -n "$DOC_STALE" ]; then
+    fail "差分のしきい値がドキュメントとズレています (app.js: 前後${DIFF_CTX}行 / ${DIFF_CELLS_H}セル):$DOC_STALE"
+  else
+    note "差分のしきい値の記述一致 (app.js == README/CHANGELOG: 前後${DIFF_CTX}行・${DIFF_CELLS_H}セル)"
+  fi
+fi
+
 echo
 [ $FAIL -eq 0 ] && { echo "check.sh: PASS"; exit 0; } || { echo "check.sh: FAIL"; exit 1; }

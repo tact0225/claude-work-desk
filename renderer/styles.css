@@ -206,6 +206,50 @@ body.resizing.row { cursor: row-resize; }
 }
 .editor:focus { box-shadow: inset 2px 0 0 var(--accent); }
 
+/* ---------- 差分ビュー（開いた時点 → 今） ---------- */
+/* 上から下に1カラムで流す（左右2ペインにしない＝長い日本語の行が両側で折り返して
+   行が対応しなくなり、かえって読めなくなる）。削除=赤・追加=緑。 */
+.diffwrap { display: flex; flex-direction: column; min-height: 100%; }
+/* 「確認済み」は差分を読み終えた位置でも押せるよう上端に貼り付ける */
+.diff-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 6px 14px;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.diff-stat { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.diff-ack {
+  background: none; border: 1px solid var(--border); color: var(--fg);
+  border-radius: 4px; padding: 3px 12px; cursor: pointer; font-size: 12px;
+  flex-shrink: 0; font-family: var(--font-ui);
+}
+.diff-ack:hover { border-color: var(--accent); color: var(--accent); }
+.diff-note { padding: 32px 24px; color: var(--muted); line-height: 1.9; }
+.diff-body { padding: 6px 0 40px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
+/* 空行でも行の高さを残す（min-height が無いと削除された空行が消えて見える） */
+.dline { display: flex; gap: 8px; padding: 0 14px; min-height: 1.55em; }
+.dsign { flex-shrink: 0; width: 8px; color: var(--muted); user-select: none; }
+.dtext { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* ダーク基調に馴染ませつつ、赤と緑は一目で分かる強さを残す（背景で面・文字色で線） */
+.dline.del { background: rgba(255, 92, 92, 0.13); }
+.dline.del .dsign, .dline.del .dtext { color: #ff9b9b; }
+.dline.add { background: rgba(80, 210, 120, 0.13); }
+.dline.add .dsign, .dline.add .dtext { color: #7ee0a0; }
+.dline.same .dtext { color: var(--muted); }
+/* 空行の増減に置く「（空行）」。本文の文字と見分けが付くように弱めて傾ける */
+.dline.blank .dtext { opacity: 0.62; font-style: italic; }
+.dline.gap {
+  color: #6b7482; background: rgba(255, 255, 255, 0.03);
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  margin: 5px 0; padding: 2px 14px; user-select: none;
+}
+/* 差分ボタンの●（何か変わった＝押さなくても分かる。ツリーの未読と同じ色を使う）。
+   ⚠ .toggled より後に置く＝押している間は反転色を優先させるため下に .changed.toggled を書く */
+#preview-actions button.changed { border-color: var(--new); color: var(--new); }
+#preview-actions button.changed:hover { border-color: var(--accent); color: var(--accent); }
+#preview-actions button.changed.toggled,
+#preview-actions button.changed.toggled:hover { color: #14181d; border-color: var(--accent); }
+
 .welcome { padding: 40px; color: var(--muted); line-height: 2.1; }
 .welcome h2 { color: var(--fg); margin-bottom: 12px; }
 .welcome.error h2 { color: #ff8f8f; }
@@ -399,11 +443,13 @@ body.resizing.row { cursor: row-resize; }
 }
 .settings-actions button:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ズーム表示トースト */
+/* 通知トースト（ズーム倍率・差分ビューから本文へ戻した時など。id はズーム由来のまま） */
 #zoom-toast {
   position: fixed; top: 14px; right: 18px; z-index: 300;
   background: #2b313a; border: 1px solid var(--border); border-radius: 6px;
   padding: 6px 14px; font-size: 14px; font-weight: 600;
+  /* 倍率の2〜3文字だけでなく文章も入る。長い言語で画面外へはみ出さないよう折り返す */
+  max-width: 60vw; overflow-wrap: anywhere;
   opacity: 0; pointer-events: none; transition: opacity 0.15s;
 }
 #zoom-toast.show { opacity: 1; }
