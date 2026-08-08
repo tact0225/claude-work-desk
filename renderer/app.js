@@ -91,6 +91,12 @@ async function init() {
   // ⚠ ルートピッカーで止まる経路でも腐り検知の窓口を空にしない。空文字だと幅が0になり、
   //    「止まっている」ことが画面に出ないうえクリックでの再開すら押せない（QA致命1）
   setSyncStatus()
+  // ⚠ 差分の基準は openPreview より前に必ず戻す。ここより後ろに置くと、タブの「続きから」で
+  //    復元した1枚が「今の内容」で基準を取り直し、留守の間の書き換えが起動した瞬間に消える
+  //    ＝永続化を足した意味が丸ごと無くなる（この1行の位置が機能の成否そのもの）。
+  // ⚠ ルートピッカーで止まる経路より前に置くのも同じ理由＝ここを通らないと保存も止まるので、
+  //    「読めていないのに書き出して全部消す」も同時に塞げる。
+  loadDiffBases()
   if (!CONFIG.rootOk) { showRootPicker(); return }
   loadTabs()
   const tb = await startingTab()
@@ -996,7 +1002,10 @@ async function openPreview(p) {
   //    （ツリーの同じ行を再クリック／ダブルクリックで外部エディタ＝click が先に2発飛ぶ／
   //      ← で離れて戻る／受領フィードの行）。ここで無条件に取り直すと、その瞬間に
   //    「まだ見ていない書き換え」が復元不能で消える。同じパスの基準を既に持っているなら据え置く。
-  if (!shouldKeepDiffBase(res)) setDiffBase(res)
+  // ⚠ 据え置く時も「最近見た」印だけは更新する（中身は動かさない）。ここを通さないと、
+  //    追いかけている本命ほど並びが古いままになり、上限に達した時に真っ先に捨てられる。
+  if (shouldKeepDiffBase(res)) touchDiffBase(res)
+  else setDiffBase(res)
   diffMode = false // 別のファイルに移ったら差分ビューは畳む（前のファイルの基準で開いたままにしない）
   renderPreview(res)
   // 開いた＝読んだ、とみなして未読を落とす。印が消えるのを待たずに先に描き替える
@@ -1265,9 +1274,90 @@ const DIFF_CONTEXT = 3
 // 超えたら計算せずに打ち切って「大きすぎる」と出す（黙って固まるのが一番困る）。
 const DIFF_MAX_CELLS = 4000000
 
-// 差分の基準。ファイルパス単位で1つだけ持つ（別ファイルを開けばそのファイルの基準になる）
-let diffBase = null   // { key: pathKey(path), text: 開いた/確認済みにした時点の中身 }
+// 差分の基準は「ファイルごと」に持つ。
+// ⚠ v0.10 までは基準を1つのスロットに持っていた（別ファイルを開いた瞬間に前のファイルの
+//    基準が消え、戻ってきた時に「今」で取り直していた）。これが実測で踏んだ事故の正体:
+//    「確認済み」を押す → ついでに別のファイルを覗く → その留守の間にレナードが書き換える →
+//    戻ると基準が今に貼り直され、● も差分も出ない（留守中の書き換えが復元不能で消える）。
+//    確認済みは「以後はここから見る」という宣言なので、別のファイルを見た程度で捨ててはいけない。
+//    ＝基準はパス単位で保持し、離れて戻っても続きから見える形にする。
+// ⚠ 際限なく溜めない。件数と合計文字数の両方で上限を置き、古い順に落とす（LRU）。
+//    片方だけだと 4MB のファイルを20本掴んで太る／小さいファイルを何百本も溜める、のどちらかで破れる。
+const DIFF_BASE_MAX = 20
+const DIFF_BASE_MAX_CHARS = 4000000
+const diffBases = new Map() // pathKey → 基準テキスト（Mapの挿入順＝古い順に並ぶ）
 let diffMode = false  // 差分ビューを出しているか
+
+// 基準は「アプリを閉じるまで」ではなく「次に開いた時も」効かないと意味がない。
+// ⚠ v0.10 までは基準がメモリ上の Map だけだった＝Desk を閉じる／`Ctrl+R` でリロードする／
+//    設定で言語を切り替える（location.reload が走る）だけで、追いかけていた基準が
+//    **1つ残らず**消えていた。しかも消えたことは画面に出ない——次に開いた時に「今の内容」で
+//    基準を取り直すので、● も差分も出ない完全に静かな状態に戻る（実測で確認）。
+//    Desk は常駐して使う道具で、「夜に確認済みを押して閉じる → 留守の間に書き換えられる →
+//    翌朝また開く」が一番よくある形なので、ユーザーは**クリックを1つも挟まずに**ここを踏む。
+// ⚠ 置き場は localStorage。中身は「開いた時点のファイルの写し」なので、repo にも
+//    config.json にも絶対に書き出さない（このPCのローカル領域だけに置く。タブの保存と
+//    同じ線引きで、理由はもう一段強い＝あちらはパス、こちらは本文そのもの）。
+// ⚠ メモリ側の上限（400万文字）をそのまま書こうとすると必ず溢れる。localStorage の枠は
+//    概ね5〜10MB・しかもUTF-16勘定で、400万文字＝それだけで約8MB。永続化側は**別の小さい枠**を
+//    持ち、入るぶんだけ新しい順に入れる。溢れても描画は止めない（下の try/catch）。
+// ⚠ 既知の劣化（未修正・将来直す時の優先度メモ）: pathKey は大小文字を潰すので、同じフォルダに
+//    同居する a.md と A.md は1つの基準を共有する＝嘘の差分を出す。永続化を入れる前は Desk を
+//    閉じれば消えていたが、今は再起動をまたいで残る（逃げ道は「確認済み」だけ）。実害は今のところ
+//    無い（claude-work 全体で衝突するペアは0件）ので直していないが、悪化はしている。
+const DIFF_BASE_STORE_KEY = 'diffBases'
+const DIFF_BASE_STORE_MAX_CHARS = 500000
+
+// ⚠ 読み戻す前に保存させない。読む前に1本でも書き出すと、その時点の（ほぼ空の）中身で
+//    保存データを上書きし、前回ぶんが復旧不能で消える。歯止めは呼び出し側ではなく
+//    保存処理の中に置く（saveTabs の tabsLoaded と同じ作法・入口は今後も増える）。
+let diffBasesLoaded = false
+
+// ⚠ 詰めるのは**新しい順**（Mapの末尾から）。枠に入らない大物は飛ばして次を見る＝
+//    4MB級の1本に枠を丸ごと持っていかれて、追いかけている記事が1本も残らない、を防ぐ。
+// ⚠ 書き出しは try/catch で囲い、失敗したら本数を半分に落として繰り返す。localStorage の
+//    実際の枠は環境で違う＝計算で当てにいかず「書いてみて、駄目なら縮める」。
+//    どう転んでも例外を外に出さない（ここで throw すると差分の描画ごと止まる）。
+function saveDiffBases() {
+  if (!diffBasesLoaded) return
+  const all = [...diffBases]
+  const items = []
+  let chars = 0
+  for (let i = all.length - 1; i >= 0; i--) {
+    const [k, v] = all[i]
+    if (typeof k !== 'string' || !k || typeof v !== 'string') continue
+    if (chars + v.length > DIFF_BASE_STORE_MAX_CHARS) continue
+    chars += v.length
+    items.push({ k, v })
+  }
+  items.reverse() // 保存は古い順＝読み戻した Map の並びが LRU の並びのまま復元される
+  for (let n = items.length; n > 0; n = Math.floor(n / 2)) {
+    try {
+      localStorage[DIFF_BASE_STORE_KEY] = JSON.stringify({ v: 1, items: items.slice(items.length - n) })
+      return
+    } catch (err) { /* 枠に入らなかった＝次の周でもっと減らす */ }
+  }
+  // 1本も置けない（枠が埋まっている等）。古い保存値を残すと嘘の基準で差分を出すので消す。
+  try { localStorage.removeItem(DIFF_BASE_STORE_KEY) } catch (err) { /* ここまで来たら諦める */ }
+}
+
+// ⚠ 壊れた／手で書き換えられた保存値を読んでも描画側を落とさない。型は1つずつ確かめる
+//    （loadTabs と同じ作法）。ここで throw すると起動そのものが死ぬ＝Desk が開かなくなる。
+// ⚠ 読んだ中身も diffNormalize を通す。保存値に CRLF が紛れていると ● が点きっぱなしになる
+//    （差分本体は両側を正規化してから比べるので、● だけが嘘をつく形になる）。
+function loadDiffBases() {
+  diffBases.clear()
+  let saved = null
+  try { saved = JSON.parse(localStorage[DIFF_BASE_STORE_KEY] || 'null') } catch (err) { saved = null }
+  const items = saved && Array.isArray(saved.items) ? saved.items : []
+  for (const raw of items) {
+    if (!raw || typeof raw.k !== 'string' || !raw.k || typeof raw.v !== 'string') continue
+    diffBases.delete(raw.k) // 保存値に同じキーが2度出てきても、後の1本だけを新しい側に残す
+    diffBases.set(raw.k, diffNormalize(raw.v))
+  }
+  trimDiffBases() // 上限を後から絞った時に、古い保存値がそのまま生き残らないように
+  diffBasesLoaded = true // ここを通って初めて保存を許す（上の diffBasesLoaded のコメント参照）
+}
 
 // ⚠ 改行コードは揃えてから比べる。CRLF↔LF の違いだけで全行が「変わった」と出ると、
 //    変更点だけ見るという目的が丸ごと壊れる（Windows側で編集したファイルで実際に踏む）
@@ -1297,24 +1387,78 @@ function diffLines(text) {
   return s === '' ? [] : s.split('\n')
 }
 
+// ⚠ editable でない res（画像・PDF・4MB超）が来ても、他のファイルの基準は消さない。
+//    以前はここで丸ごと null にしていたので、非対象のファイルを1枚挟むだけで
+//    追いかけていた基準が飛んだ。「記録しない」であって「捨てる」ではない。
 function setDiffBase(res) {
-  diffBase = isEditable(res) ? { key: pathKey(res.path), text: diffNormalize(res.source) } : null
+  if (!isEditable(res)) return
+  const key = pathKey(res.path)
+  diffBases.delete(key) // 入れ直して並びの末尾（＝一番新しい）へ移す
+  diffBases.set(key, diffNormalize(res.source))
+  trimDiffBases()
+  // ⚠ 基準の中身が動くのはここだけ＝保存もここに掛ける。touchDiffBase（並びだけ動かす）からは
+  //    呼ばない。あれは openPreview のたびに走るので、ファイルを1枚開くたびに数十万文字の
+  //    JSON.stringify が走ることになる。並びのズレは次に基準を取った時か終了時に直る。
+  // ⚠ 終了時（beforeunload）の保存だけに頼らない。強制終了・WSLごと落ちる・電源断では
+  //    beforeunload は走らないので、そこで基準が丸ごと消える。
+  //    ただし localStorage のディスクへの書き出しは Chromium 側が数秒遅らせる。しかも下の
+  //    saveDiffBases は1キーに全体を丸ごと上書きする＝未コミットのまま落ちると、失われるのは
+  //    「直前の1本」ではなく**最後に書き出された時点より後に取った基準ぜんぶ**（実測: 0.5秒後の
+  //    SIGKILL で消え、10秒後なら残る／直前の数秒で2枚開けば2本ともまとめて巻き戻る）。
+  //    ここで呼んで守れるのは、最後にディスクへ乗った時点までの基準。
+  saveDiffBases()
 }
 
-// 「同じパスの基準を既に持っている」＝取り直してはいけない。openPreview は同じファイルに
+// 既に持っている基準を「最近見た」側（Mapの末尾）へ寄せる。
+// ⚠ 動かすのは並びだけ。中身（基準テキスト）は絶対に書き換えない——ここで書き換えると、
+//    今回直したバグ（開き直した瞬間に未確認の書き換えが消える）がそのまま戻る。
+// ⚠ これが無いと退避順が「最後に見た順」ではなく「最初に基準を取った順」になり、
+//    追いかけている本命ほど先に捨てられる（本命は据え置き判定で setDiffBase を通らないため、
+//    何度開き直しても並びが動かない）。上限の向こう側で、しかも意図と逆の順序で
+//    「基準を黙って失わない」が破れる＝この機能の存在理由そのものが壊れる。
+function touchDiffBase(res) {
+  const key = pathKey(res && res.path)
+  if (!diffBases.has(key)) return
+  const text = diffBases.get(key)
+  diffBases.delete(key)
+  diffBases.set(key, text)
+}
+
+// しばらく見ていないものから落として上限に収める。⚠ 最後の1本は必ず残す＝1本で文字数の
+// 上限を超える巨大ファイルを開いた時に、入れた直後の基準を自分で捨てて「差分が一生出ない」にしない。
+function trimDiffBases() {
+  let chars = 0
+  for (const text of diffBases.values()) chars += text.length
+  while (diffBases.size > 1 && (diffBases.size > DIFF_BASE_MAX || chars > DIFF_BASE_MAX_CHARS)) {
+    const oldest = diffBases.keys().next().value
+    chars -= diffBases.get(oldest).length
+    diffBases.delete(oldest)
+  }
+}
+
+// そのファイルの基準（無ければ undefined）。'' を持つファイルと区別したいので null は返さない。
+function diffBaseOf(res) {
+  return isEditable(res) ? diffBases.get(pathKey(res.path)) : undefined
+}
+
+// 「そのパスの基準を既に持っている」＝取り直してはいけない。openPreview は同じファイルに
 // 対して何度でも走る（再クリック・ダブルクリック・← で戻る・受領フィード）ので、その全部を
 // 呼び出し側で見張るのは無理＝ここ1箇所で塞ぐ。
-// ⚠ 別のファイルを開けば diffBase はそちらに移る＝離れて戻ってきた時は取り直しになる
-//    （「同じパスを連続で開いた時だけ据え置く」が正しい挙動）。
+// ⚠ 別のファイルを見に行っても、そのファイルの基準は残る（上の LRU から溢れるまで）。
+//    戻ってきた時に取り直すと、留守の間の書き換えが黙って消える（実測で踏んだ事故）。
 function shouldKeepDiffBase(res) {
-  return !!diffBase && !!res && diffBase.key === pathKey(res.path)
+  return !!res && diffBases.has(pathKey(res.path))
 }
 
 // 今の版が基準から動いているか。文字列の比較1回で済む＝ポーリングのたびに差分を
 // 組み直す必要はない（●を出すかどうかの判定だけならこれで足りる）。
+// ⚠ ここは文章／コードのモードに関係なく「生の中身」で見る。文章モードの絞り込み
+//    （frontmatter・コードブロック・画像・空行を落とす）を ● にまで効かせると、
+//    frontmatter だけ書き換わった時に ● すら出ず、本田さんは書き換えられたことに
+//    一生気づけない。● は「何か動いた」の合図、絞り込みは「開いた後の読みやすさ」の話。
 function hasDiff(res) {
-  if (!diffBase || !isEditable(res) || diffBase.key !== pathKey(res.path)) return false
-  return diffBase.text !== diffNormalize(res.source)
+  const base = diffBaseOf(res)
+  return base !== undefined && base !== diffNormalize(res.source)
 }
 
 // 行単位の LCS。依存パッケージを増やさない方針なので自前で持つ。
@@ -1411,12 +1555,88 @@ function buildDiff(oldText, newText, context) {
   return { ok: true, rows: collapseSame(ops, ctx), added, removed }
 }
 
+// ---------- 文章モード / コードモード ----------
+// 読む用途（記事）とコードで、差分に出したいものが違う（本田さんの決定）。
+//   文章モード: frontmatter・コードブロック・生HTML・画像リンク・空行を落として本文だけ見る
+//   コードモード: 何も落とさない（従来どおり）
+// 既定は拡張子で自動判定。差分画面の上のトグルでその場で行き来できる。
+
+const DIFF_PROSE_EXT = ['.md', '.markdown', '.txt']
+
+// 手動トグルはファイル単位で覚える（別のファイルに移ったら、そのファイルの拡張子で
+// 自動判定に戻る）。全体に効かせると、記事で文章モードにした設定がコードにも付いて回る。
+let diffProseKey = null      // 手動で切り替えたファイル（pathKey）
+let diffProseChoice = null   // 'prose' | 'code'
+
+function diffViewMode(res) {
+  if (res && diffProseChoice && diffProseKey === pathKey(res.path)) return diffProseChoice
+  const p = String((res && res.path) || '').toLowerCase()
+  return DIFF_PROSE_EXT.some((ext) => p.endsWith(ext)) ? 'prose' : 'code'
+}
+
+// 画像リンクと生HTMLタグ。
+// ⚠ タグは「< の次が英字か / ! ?」だけを見る。`<[^>]*>` で刈ると、本文の「a < b > c」
+//    のような比較記号まで飲み込んで日本語の本文が黙って消える。
+const DIFF_IMG_RE = /!\[[^\]]*\]\([^)]*\)/g
+const DIFF_TAG_RE = /<!--[\s\S]*?-->|<[!/?]?[a-zA-Z][^<>]*>/g
+// コードブロックのフェンス（``` か ~~~ が3つ以上）。
+// ⚠ 関数の中に置かない。test-diff.js の grabFn は正規表現リテラルの中の { } とバッククォートを
+//    見分けられないので、この定数を splitProse の中に書いた瞬間にテストが関数を切り出せなくなる。
+const DIFF_FENCE_RE = /^\s*(`{3,}|~{3,})/
+
+// 文章モード用に「本文」と「本文以外」へ割る。
+// ⚠ 割った2つで元の中身を覆う（落とした側にも変更があれば、件数として知らせるため）。
+//    唯一の例外が空行で、こちらは両方に入れない＝空行の増減は文章モードでは無かったことにする
+//    （段落の割り方が変わっただけで「本文以外に変更があります」と出ると、その表示自体が
+//      信用されなくなる。空行を見たい時はコードモードに切り替えれば従来どおり出る）。
+function splitProse(text) {
+  const src = diffLines(text) // 改行コードと末尾の空行はここで既に揃っている
+  const body = []
+  const other = []
+  let i = 0
+  // 1) frontmatter: 先頭行が --- で、次の --- までを丸ごと落とす（閉じが無ければ本文扱い）
+  if (src[0] === '---') {
+    let j = 1
+    while (j < src.length && src[j] !== '---') j++
+    if (j < src.length) { for (let k = 0; k <= j; k++) other.push(src[k]); i = j + 1 }
+  }
+  // 2) コードブロック（``` / ~~~ のフェンス）は中身ごと落とす
+  let fence = null
+  for (; i < src.length; i++) {
+    const line = src[i]
+    const m = line.match(DIFF_FENCE_RE)
+    if (fence) {
+      other.push(line)
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null
+      continue
+    }
+    if (m) { fence = m[1]; other.push(line); continue }
+    // 3) 画像リンクと生HTMLタグを抜く。抜いた後に文字が残れば、それが本文。
+    const picked = []
+    const rest = line
+      .replace(DIFF_IMG_RE, (s) => { picked.push(s); return '' })
+      .replace(DIFF_TAG_RE, (s) => { picked.push(s); return '' })
+    if (rest.trim() === '') {
+      // 空行（4）は捨てる。画像だけ・タグだけの行は「本文以外」として残す
+      if (line.trim() !== '') other.push(line)
+      continue
+    }
+    body.push(rest)
+    if (picked.length) other.push(picked.join(''))
+  }
+  return { body: body.join('\n'), other: other.join('\n') }
+}
+
 // 「確認済み」＝ここまでは見た。基準を今の内容に進めて通常プレビューへ戻す。
 // 以後は「確認済みを押した時点 → 今」の差分になる。
-function ackDiff() {
-  setDiffBase(currentFile)
+// ⚠ 進める相手は「今その差分ビューに出しているファイル」＝renderDiff が受け取った res。
+//    グローバルの currentFile を直に見ると、それが editable でない版に入れ替わっていた時に
+//    基準を丸ごと捨ててしまう（= 以後 ● も差分も出ない）経路が残る。
+function ackDiff(res) {
+  const f = res || currentFile
+  setDiffBase(f)
   diffMode = false
-  renderPreview(currentFile)
+  renderPreview(f)
 }
 
 // 差分ビューを描く。描いたら true、見るものが無くて描かなかったら false を返す
@@ -1424,13 +1644,39 @@ function ackDiff() {
 //   呼び返すと、描画の入口が2つになって追えなくなる）。
 function renderDiff(res) {
   const body = $('#preview-body')
-  // 基準が無い（別ファイルの基準しか無い等）ときは自分自身と比べる＝「変更なし」扱い。
+  // 基準が無い（まだ一度も記録していない等）ときは自分自身と比べる＝「変更なし」扱い。
   // ここで落ちると差分ボタンが無反応に見えるので、必ず判断してから返す。
-  const base = diffBase && diffBase.key === pathKey(res.path) ? diffBase.text : res.source
-  const d = buildDiff(base, res.source)
+  const stored = diffBaseOf(res)
+  const base = stored === undefined ? res.source : stored
+  const mode = diffViewMode(res)
+
+  let d
+  let otherNote = '' // 文章モードで落とした範囲に変更があった時の告知（無言で消さないための一行）
+  if (mode === 'prose') {
+    const a = splitProse(base)
+    const b = splitProse(res.source)
+    d = buildDiff(a.body, b.body)
+    // ⚠ 落とした側は「変わったかどうか」を先に文字列比較で見る。いきなり buildDiff に
+    //    渡すと、巨大なコードブロックで打ち切られた時に「変わったのかどうか」すら言えない。
+    if (a.other !== b.other) {
+      const od = buildDiff(a.other, b.other)
+      otherNote = od.ok
+        ? t('diff.otherChanges', { n: od.added + od.removed })
+        : t('diff.otherChangesSome') // 件数は数えられなかったが「ある」ことは言う
+    } else if (a.body === b.body && diffNormalize(base) !== diffNormalize(res.source)) {
+      // ⚠ 本文にも本文以外にも差が無いのに生では違う＝落ちたのは空行だけ（本文と本文以外で
+      //    空行以外は覆っているため）。ここを黙って畳むと、● が点いているのに開くと
+      //    「変更はありません」に飛ばされる＝一番「壊れた?」に見える経路になる。
+      otherNote = t('diff.blankOnly')
+    }
+  } else {
+    d = buildDiff(base, res.source)
+  }
   // 変更が無い＝「変更はありません」の画面に取り残さない。差分表示中にレナードが編集を
-  // 巻き戻すとここに来る（本文に戻るのにもう一度ボタンを押させるのは「壊れた?」に見える）
-  if (d.ok && !d.rows.length) return false
+  // 巻き戻すとここに来る（本文に戻るのにもう一度ボタンを押させるのは「壊れた?」に見える）。
+  // ⚠ 本文に変更が無くても、落とした範囲に変更があるなら畳まない。畳むと
+  //    「● が点いていたのに開いたら何も無い」＝壊れたようにしか見えない。
+  if (d.ok && !d.rows.length && !otherNote) return false
 
   let stat = ''
   let inner
@@ -1456,13 +1702,19 @@ function renderDiff(res) {
       parts.push(`<div class="dline ${row.kind}${blank ? ' blank' : ''}"><span class="dsign">${sign}</span><span class="dtext">${escapeHtml(text)}</span></div>`)
     }
     inner = parts.join('')
+    // 落とした範囲にしか変更が無い時に、本文側が空のままだと「押したのに真っ白」になる
+    if (!parts.length) inner = `<div class="diff-note">${escapeHtml(t('diff.proseNone'))}</div>`
   }
 
   body.innerHTML = `<div class="diffwrap">
       <div class="diff-head">
         <span class="diff-stat">${escapeHtml(stat)}</span>
-        <button class="diff-ack"></button>
+        <span class="diff-head-btns">
+          <button class="diff-viewmode"></button>
+          <button class="diff-ack"></button>
+        </span>
       </div>
+      ${otherNote ? `<div class="diff-other">${escapeHtml(otherNote)}</div>` : ''}
       <div class="diff-body">${inner}</div>
     </div>`
   // ⚠ ボタンの文言と title は属性に埋め込まず、要素に対して入れる。escapeHtml は
@@ -1470,7 +1722,20 @@ function renderDiff(res) {
   const ack = body.querySelector('.diff-ack')
   ack.textContent = t('btn.diffAck')
   ack.title = t('tip.diffAck')
-  ack.addEventListener('click', ackDiff)
+  ack.addEventListener('click', () => ackDiff(res))
+  // 文章 ⇄ コードのトグル。今どちらで見ているかをボタン自身に出す（押す前に分かる）
+  const vm = body.querySelector('.diff-viewmode')
+  // ⚠ キーは呼び出しの直後に文字列を置く形で書く。check-i18n.js は t( の直後の文字列しか
+  //    拾えないので、条件式でキーを選ぶ書き方にすると「使われていないキー」に見えて
+  //    未翻訳検知が空振りする（ここで検知の網から漏れると、翻訳漏れが画面まで出る）
+  vm.textContent = mode === 'prose' ? t('btn.diffProse') : t('btn.diffCode')
+  vm.title = mode === 'prose' ? t('tip.diffProse') : t('tip.diffCode')
+  vm.classList.toggle('prose', mode === 'prose')
+  vm.addEventListener('click', () => {
+    diffProseKey = pathKey(res.path)
+    diffProseChoice = mode === 'prose' ? 'code' : 'prose'
+    renderPreview(res)
+  })
   return true
 }
 
@@ -2124,6 +2389,10 @@ function setupGlobal() {
     //    最後に見ていたタブの展開・選択・スクロールだけが毎回失われる
     captureTab()
     saveTabs()
+    // ⚠ 差分の基準も書き出す。中身は setDiffBase の時点で保存済みなので、ここで拾うのは
+    //    「最後にどれを見ていたか」の並び（touchDiffBase ぶん）＝次に開いた時の退避順が
+    //    実際の使用順とズレないようにする。
+    saveDiffBases()
     if (editMode && editDirty) { e.preventDefault(); e.returnValue = '' }
   })
 }

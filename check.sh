@@ -92,23 +92,40 @@ group3() { # 4000000 → 4,000,000（ドキュメントは桁区切りで書い�
 }
 DIFF_CTX=$(grep -m1 -E '^const DIFF_CONTEXT = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_CONTEXT = ([0-9]+).*/\1/')
 DIFF_CELLS=$(grep -m1 -E '^const DIFF_MAX_CELLS = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_MAX_CELLS = ([0-9]+).*/\1/')
+# 基準の枠（メモリ側／永続化側）もドキュメントに手で書き写してある。片方だけ変えると、
+# 「500,000文字までは翌日も残る」という約束だけが静かに嘘になる（動かしても分からない）
+DIFF_BASE_CHARS=$(grep -m1 -E '^const DIFF_BASE_MAX_CHARS = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_BASE_MAX_CHARS = ([0-9]+).*/\1/')
+DIFF_STORE_CHARS=$(grep -m1 -E '^const DIFF_BASE_STORE_MAX_CHARS = [0-9]+' renderer/app.js | sed -E 's/^const DIFF_BASE_STORE_MAX_CHARS = ([0-9]+).*/\1/')
 DOC_STALE=""
 doc_has() { grep -qF "$2" "$1" || DOC_STALE="$DOC_STALE
       $1 に「$2」が無い"; }
-if [ -z "$DIFF_CTX" ] || [ -z "$DIFF_CELLS" ]; then
-  fail "renderer/app.js から DIFF_CONTEXT / DIFF_MAX_CELLS を読めません（定数を改名したら check.sh 9) も直す）"
+if [ -z "$DIFF_CTX" ] || [ -z "$DIFF_CELLS" ] || [ -z "$DIFF_BASE_CHARS" ] || [ -z "$DIFF_STORE_CHARS" ]; then
+  fail "renderer/app.js から差分の定数を読めません（定数を改名したら check.sh 9) も直す）"
 else
   DIFF_CELLS_H=$(group3 "$DIFF_CELLS")
+  DIFF_BASE_H=$(group3 "$DIFF_BASE_CHARS")
+  DIFF_STORE_H=$(group3 "$DIFF_STORE_CHARS")
   doc_has README.ja.md    "前後${DIFF_CTX}行"
   doc_has README.md       "${DIFF_CTX} lines of context"
   doc_has CHANGELOG.ja.md "前後${DIFF_CTX}行"
   doc_has CHANGELOG.md    "${DIFF_CTX} lines of context"
   doc_has CHANGELOG.ja.md "${DIFF_CELLS_H}セル"
   doc_has CHANGELOG.md    "${DIFF_CELLS_H} cells"
+  doc_has README.ja.md    "${DIFF_BASE_H}文字"
+  doc_has README.md       "${DIFF_BASE_H} characters"
+  doc_has README.ja.md    "${DIFF_STORE_H}文字"
+  doc_has README.md       "${DIFF_STORE_H} characters"
+  doc_has CHANGELOG.ja.md "${DIFF_STORE_H}文字"
+  doc_has CHANGELOG.md    "${DIFF_STORE_H} characters"
   if [ -n "$DOC_STALE" ]; then
-    fail "差分のしきい値がドキュメントとズレています (app.js: 前後${DIFF_CTX}行 / ${DIFF_CELLS_H}セル):$DOC_STALE"
+    fail "差分のしきい値がドキュメントとズレています (app.js: 前後${DIFF_CTX}行 / ${DIFF_CELLS_H}セル / 基準${DIFF_BASE_H}文字 / 保存${DIFF_STORE_H}文字):$DOC_STALE"
   else
-    note "差分のしきい値の記述一致 (app.js == README/CHANGELOG: 前後${DIFF_CTX}行・${DIFF_CELLS_H}セル)"
+    note "差分のしきい値の記述一致 (app.js == README/CHANGELOG: 前後${DIFF_CTX}行・${DIFF_CELLS_H}セル・基準${DIFF_BASE_H}文字・保存${DIFF_STORE_H}文字)"
+  fi
+  # ⚠ 永続化の枠がメモリ側の枠以上だと localStorage（概ね5〜10MB・UTF-16）に必ず溢れる。
+  #    test-diff.js でも縛っているが、数字を触るのはこのファイルを見ている時なのでここにも置く
+  if [ "$DIFF_STORE_CHARS" -ge "$DIFF_BASE_CHARS" ]; then
+    fail "永続化の枠がメモリ側の枠を下回っていません（localStorage が溢れる）: ${DIFF_STORE_H} >= ${DIFF_BASE_H}"
   fi
 fi
 

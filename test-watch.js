@@ -285,6 +285,9 @@ function makeHarness(cfg) {
     const renderTabs = () => bump('renderTabs')
     const baseName = (p) => String(p).replace(/[\\\\/]+$/, '').split(/[\\\\/]/).pop()
     const showRootPicker = () => bump('showRootPicker')
+    // 差分の基準の読み戻し。中身は test-diff.js 側で見るので、ここでは
+    // 「起動の手順のどこで呼ばれるか」だけ数える（呼ぶ順序は test-diff.js 10) が縛る）
+    const loadDiffBases = () => bump('loadDiffBases')
     const setBrowseRoot = async (d) => { bump('setBrowseRoot'); if (ctx.throwOnTree) throw new Error('tree boom'); browseRoot = d }
     // openTab の中身（展開・選択・スクロールの復元）はDOMの話なので、ここではツリーを
     // 開くところだけ本物と同じ順序で走らせる＝転んだ時に startAutoRefresh へ抜ける経路を見る

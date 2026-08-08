@@ -277,6 +277,21 @@ body.resizing.row { cursor: row-resize; }
   flex-shrink: 0; font-family: var(--font-ui);
 }
 .diff-ack:hover { border-color: var(--accent); color: var(--accent); }
+.diff-head-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* 文章 ⇄ コードのトグル。今どちらで見ているかをボタン自身に出す（押す前に分かる） */
+.diff-viewmode {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px;
+  flex-shrink: 0; font-family: var(--font-ui);
+}
+.diff-viewmode:hover { border-color: var(--accent); color: var(--accent); }
+.diff-viewmode.prose { color: var(--fg); }
+/* 文章モードで落とした範囲に変更があった時の告知。無言で消さないための一行なので、
+   本文の差分より前（頭）に置いて、色は警告ではなく注記の強さにする */
+.diff-other {
+  padding: 7px 14px; font-size: 12px; color: #d9b877;
+  background: rgba(217, 184, 119, 0.09); border-bottom: 1px solid var(--border);
+}
 .diff-note { padding: 32px 24px; color: var(--muted); line-height: 1.9; }
 .diff-body { padding: 6px 0 40px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
 /* 空行でも行の高さを残す（min-height が無いと削除された空行が消えて見える） */
