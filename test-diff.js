@@ -70,10 +70,12 @@ function grabDecl(name) {
 
 const DIFF_CONTEXT = grabConst('DIFF_CONTEXT')
 const DIFF_MAX_CELLS = grabConst('DIFF_MAX_CELLS')
+const DIFF_FULL_MAX_ROWS = grabConst('DIFF_FULL_MAX_ROWS')
 
 const factory = new Function(`
   const DIFF_CONTEXT = ${DIFF_CONTEXT}
   const DIFF_MAX_CELLS = ${DIFF_MAX_CELLS}
+  const DIFF_FULL_MAX_ROWS = ${DIFF_FULL_MAX_ROWS}
   ${grabFn('diffNormalize')}
   ${grabFn('diffLines')}
   ${grabFn('lcsOps')}
@@ -162,6 +164,61 @@ const txt = (arr) => arr.join('\n')
   ok(shown + hidden === 40, `表示 ${shown} + 省略 ${hidden} が元の 40行 と合わない`)
 }
 
+// ---------- 2b) 全文表示（畳まない） ----------
+// 記事を頭から通して読み、赤だけ拾えば直す前・緑だけ拾えば直した後が読める、が成立するか。
+// ここが緩むと壊れ方が静か（全文と言いながら畳まれている／無変更行が抜けて文章が繋がらない）。
+{
+  const full = (a, b) => D.buildDiff(a, b, Infinity)
+
+  // 畳まない＝省略の帯が1本も出ない。畳んだ側では出る同じ入力で見る（対比で固定する）
+  const wide = [txt(['x', ...lines(50), 'y']), txt(['X', ...lines(50), 'Y'])]
+  ok(sig(D.buildDiff(wide[0], wide[1]).rows).includes('~'),
+    '前提が崩れている: 変更箇所モードで畳めていない（この対比が成立しない）')
+  const f = full(wide[0], wide[1])
+  ok(!sig(f.rows).includes('~'), `全文表示なのに省略の帯が出た: ${sig(f.rows).slice(0, 120)}`)
+
+  // 出た行だけで「直す前」と「直した後」がそれぞれ元の全文に復元できるか＝この機能の本体。
+  // 行数や帯の有無ではなく、復元できるかで縛る（読み比べができるか、そのものの検査）
+  const oldSide = f.rows.filter((r) => r.kind !== 'add').map((r) => r.text).join('\n')
+  const newSide = f.rows.filter((r) => r.kind !== 'del').map((r) => r.text).join('\n')
+  ok(oldSide === wide[0], '全文表示から「直す前」の全文が復元できない（赤＋無変更が元に戻らない）')
+  ok(newSide === wide[1], '全文表示から「直した後」の全文が復元できない（緑＋無変更が元に戻らない）')
+
+  // 件数は畳み方に依らない（表示の出し方を変えただけで統計が動くと、どちらかが嘘になる）
+  const collapsed = D.buildDiff(wide[0], wide[1])
+  ok(f.added === collapsed.added && f.removed === collapsed.removed,
+    `全文と変更箇所で件数が違う: 全文 +${f.added}-${f.removed} / 変更箇所 +${collapsed.added}-${collapsed.removed}`)
+
+  // 変更が無い時は全文でも空を返す（renderDiff 側で「変更はありません」に落とすため）
+  ok(full('a\nb', 'a\nb').rows.length === 0, '変更が無いのに全文表示が行を返した')
+
+  // 行数の天井: 超えたら畳んだ側へ落とし、落としたことを必ず返す（黙って畳まない）
+  const many = lines(DIFF_FULL_MAX_ROWS + 10)
+  const manyEdited = many.slice()
+  manyEdited[0] = 'edited-head'
+  const over = full(txt(many), txt(manyEdited))
+  ok(over.ok && over.fellBack === true,
+    `全文の行数上限(${DIFF_FULL_MAX_ROWS})を超えても畳んでいない／落としたことを返していない: rows=${over.rows.length}`)
+  ok(sig(over.rows).includes('~'), '上限超えで畳んだのに省略の帯が無い（畳めていない）')
+
+  const justUnder = lines(DIFF_FULL_MAX_ROWS - 10)
+  const justUnderEdited = justUnder.slice()
+  justUnderEdited[0] = 'edited-head'
+  const under = full(txt(justUnder), txt(justUnderEdited))
+  ok(under.ok && !under.fellBack && under.rows.length === DIFF_FULL_MAX_ROWS - 9,
+    `上限の下なのに畳んだ／行数が合わない: fellBack=${under.fellBack} rows=${under.rows.length}`)
+
+  // 境界ちょうど（表示行数 == 上限）は畳まない。> と >= の取り違えはここだけで出る
+  // ⚠ 数えるのは元のファイルの行数ではなく「出す行数」＝無変更＋赤＋緑。1行の書き換えで
+  //    ops は1本増えるので、ちょうどにするには元を上限-1行にする
+  const exact = lines(DIFF_FULL_MAX_ROWS - 1)
+  const exactEdited = exact.slice()
+  exactEdited[0] = 'edited-head'
+  const atLimit = full(txt(exact), txt(exactEdited))
+  ok(atLimit.ok && !atLimit.fellBack && atLimit.rows.length === DIFF_FULL_MAX_ROWS,
+    `上限ちょうど(${DIFF_FULL_MAX_ROWS}行)で畳んだ: fellBack=${atLimit.fellBack} rows=${atLimit.rows.length}`)
+}
+
 // ---------- 3) サイズガード ----------
 {
   // ガードは前後トリムの「後」に効く＝実際に計算するセル数で測る
@@ -233,6 +290,16 @@ const txt = (arr) => arr.join('\n')
   //    直に見ると、それが editable でない版に入れ替わっていた時に基準ごと捨てる経路が残る
   ok(/^function ackDiff\(res\)/m.test(ackDiff), '確認済みが対象のファイルを受け取っていない（ackDiff(res)）')
   ok(renderDiff.includes('ackDiff(res)'), '確認済みボタンが、今出しているファイルを渡していない')
+
+  // 全文 / 変更箇所は renderDiff が毎回決めて buildDiff に渡す（既定値に任せると、
+  // トグルを押しても畳んだままになる＝押しても何も起きないボタンになる）
+  ok(renderDiff.includes('diffRange(res)'), 'renderDiff が全文／変更箇所を決めていない')
+  ok(/buildDiff\([^)]*, ctx\)/.test(renderDiff),
+    'renderDiff が buildDiff に出し方（ctx）を渡していない（既定の畳み方に固定される）')
+  // ⚠ 「変更が無い」の判定を行数に戻さない。全文表示は無変更行も行として持つので、
+  //    行数で見ると変更ゼロでも全文が出て、本文に戻る道が消える
+  ok(renderDiff.includes('!d.added && !d.removed'),
+    '「変更が無い」を件数でなく行数で判定している（全文表示で本文に戻れなくなる）')
   // 据え置く時も「最近見た」印だけは更新する（更新しないと本命ほど先に捨てられる）
   ok(openPreview.includes('touchDiffBase('),
     'openPreview が据え置いた基準の新しさを更新していない（退避順が「最初に取った順」になる）')
@@ -307,6 +374,7 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
     function renderPreview() {}
     const DIFF_CONTEXT = ${DIFF_CONTEXT}
     const DIFF_MAX_CELLS = ${DIFF_MAX_CELLS}
+    const DIFF_FULL_MAX_ROWS = ${DIFF_FULL_MAX_ROWS}
     const DIFF_BASE_MAX = ${grabConst('DIFF_BASE_MAX')}
     const DIFF_BASE_MAX_CHARS = ${grabConst('DIFF_BASE_MAX_CHARS')}
     const diffBases = new Map()
@@ -318,12 +386,15 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
     ${grabFn('saveDiffBases')}
     let diffProseKey = null
     let diffProseChoice = null
+    let diffRangeKey = null
+    let diffRangeChoice = null
     ${grabFn('diffNormalize')}
     ${grabFn('diffLines')}
     ${grabFn('setDiffBase')}
     ${grabFn('trimDiffBases')}
     ${grabFn('diffBaseOf')}
     ${grabFn('diffViewMode')}
+    ${grabFn('diffRange')}
     ${grabFn('splitProse')}
     ${grabFn('lcsOps')}
     ${grabFn('collapseSame')}
@@ -333,9 +404,12 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
     ${grabDecl('DIFF_IMG_RE')}
     ${grabDecl('DIFF_TAG_RE')}
     ${grabDecl('DIFF_FENCE_RE')}
-    // path を差し替えると拡張子で文章／コードが切り替わる（既定は拡張子なし＝コードモード）
-    return (baseText, nowText, path) => {
+    // path を差し替えると拡張子で文章／コードが切り替わる（既定は拡張子なし＝コードモード）。
+    // 第4引数に 'full' / 'changed' を渡すと、そのファイルの手動トグルを押した状態で描く
+    return (baseText, nowText, path, rangeChoice) => {
       const p = path || 'P'
+      diffRangeKey = rangeChoice ? pathKey(p) : null
+      diffRangeChoice = rangeChoice || null
       diffBases.clear()
       if (baseText != null) setDiffBase({ path: p, source: baseText, kind: 'markdown' })
       out.html = ''
@@ -371,6 +445,80 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
   ok(blank.drew === true && blank.html.includes('class="dline del blank"'),
     `空行の削除にプレースホルダのクラスが付いていない: ${blank.html.slice(0, 200)}`)
   ok(blank.html.includes('diff.blank'), '空行の差分が無地の帯のまま（何が起きたか読めない）')
+
+  // 既定の出し分け（記事＝通して読む／コード＝変更箇所を確かめる）。
+  // 同じ入力を拡張子だけ変えて2回描く＝「畳む・畳まない」が拡張子で決まっていることを見る
+  const wideOld = txt(['x', ...lines(30), 'y'])
+  const wideNew = txt(['X', ...lines(30), 'Y'])
+  const md = render(wideOld, wideNew, '/w/a.md')
+  ok(md.drew === true && !md.html.includes('dline gap'),
+    '.md の差分が既定で全文になっていない（省略の帯が出ている）')
+  ok(md.html.includes('class="diff-body full prose"'),
+    `全文／文章モードのクラスが本文側に付いていない: ${(md.html.match(/class="diff-body[^"]*"/) || [''])[0]}`)
+  const code = render(wideOld, wideNew, '/w/a.js')
+  ok(code.drew === true && code.html.includes('dline gap'),
+    'コードの差分が既定で変更箇所だけになっていない（畳めていない）')
+  ok(code.html.includes('class="diff-body changed code"'),
+    `変更箇所／コードモードのクラスが本文側に付いていない: ${(code.html.match(/class="diff-body[^"]*"/) || [''])[0]}`)
+
+  // トグルは差分ビューに常に出す（打ち切り画面でも出る＝ここから抜ける導線を消さない）
+  ok(md.html.includes('class="diff-range"'), '全文／変更箇所のトグルが出ていない')
+  ok(over.html.includes('class="diff-range"'), '打ち切り画面に全文／変更箇所のトグルが無い')
+
+  // 全文表示でも「変更が無いなら描かない」（行数で判定すると、変更ゼロで全文が出て
+  // 本文に戻れなくなる＝差分ボタンが効かなくなったようにしか見えない）
+  const noneMd = render('a\nb', 'a\nb', '/w/a.md')
+  ok(noneMd.drew === false && !noneMd.html,
+    `全文表示で、変更が無いのに差分ビューを描いた: ${JSON.stringify(noneMd).slice(0, 120)}`)
+
+  // ⚠ ここが「全文」の本体。文章モードの絞り込み（frontmatter・コードブロック・画像・
+  //    行内の生HTML・空行を落とす）を全文表示に掛けると、緑だけ拾って読んでも
+  //    「直した後」の全文にならない。しかも落とした側が変わっていなければ告知すら出ない
+  //    ＝画面に痕跡が残らないまま嘘の全文になる。既定の .md でそれが起きないかを見る
+  const rich = [
+    '---', 'title: 記事', '---', '',
+    '本文の1行目', '![図](img/a.png)',
+    '```js', 'const a = 1', '```',
+    '本文の<b>2</b>行目',
+  ].join('\n')
+  const richNew = rich.replace('本文の1行目', '本文の1行目（直した）')
+  const richMd = render(rich, richNew, '/w/a.md')
+  ok(richMd.drew === true, '前提が崩れている: 書き換えたのに差分ビューが出ていない')
+  for (const must of ['title: 記事', 'const a = 1', '![図](img/a.png)', '&lt;b&gt;']) {
+    ok(richMd.html.includes(must),
+      `全文表示なのに「${must}」が落ちている（文章モードの絞り込みが掛かっている＝全文ではない）`)
+  }
+  // 無変更の空行は「（空行）」ではなく素の空行で出す（段落の切れ目として働かせる）
+  ok(!richMd.html.includes('class="dline same blank"'),
+    '無変更の空行に「（空行）」のプレースホルダを置いている（段落の切れ目ごとに並んで記事として読めない）')
+  // 増減した空行では今までどおりプレースホルダを出す（無地の帯にしない）
+  ok(blank.html.includes('class="dline del blank"'), '空行の削除でプレースホルダが出なくなった')
+
+  // 全文表示では文章／コードのトグルを出さない（絞り込みが効かない＝押しても何も起きない）
+  ok(!md.html.includes('diff-viewmode'), '全文表示に、効かない文章／コードのトグルが出ている')
+  ok(code.html.includes('diff-viewmode'), '変更箇所モードで文章／コードのトグルが消えている')
+
+  // 打ち切り（toobig）は「比べる量」で起きるので、畳んでも解けない＝全文表示のままだと
+  // 文章モードのファイルが既定で打ち切られうる。その時の逃げ道を画面に出しているか。
+  // ⚠ ここで案内しないと、見えている脱出路が「確認済み」だけになる＝押すと基準が今に進み、
+  //    読まないまま変更内容を失う（一番損する操作を唯一の道として見せてしまう）
+  const fenced = (p) => ['本文', '```js', ...lines(Math.ceil(Math.sqrt(DIFF_MAX_CELLS)) + 1, p), '```'].join('\n')
+  const tb = render(fenced('old'), fenced('new'), '/w/a.md')
+  ok(tb.drew === true && tb.html.includes('diff.toobig'),
+    '前提が崩れている: 全文表示で打ち切られていない（この検査が成立しない）')
+  ok(tb.html.includes('diff.toobigTryChanged'),
+    '全文表示で打ち切られた時に「変更箇所なら出るかもしれない」を案内していない')
+  // 実際に変更箇所へ切り替えれば、絞り込みが効いて打ち切られない（案内が嘘でないこと）
+  const tbChanged = render(fenced('old'), fenced('new'), '/w/a.md', 'changed')
+  ok(!tbChanged.html.includes('diff.toobig'),
+    '変更箇所に切り替えても打ち切られる（打ち切り画面の案内が嘘になっている）')
+
+  // 上限超えで畳んだ時は、畳んだことを必ず画面に出す（黙って畳むと全文表示が信用されなくなる）
+  const fellOld = txt(lines(DIFF_FULL_MAX_ROWS + 10))
+  const fellNew = txt(['edited-head', ...lines(DIFF_FULL_MAX_ROWS + 10).slice(1)])
+  const fell = render(fellOld, fellNew, '/w/a.md')
+  ok(fell.drew === true && fell.html.includes('diff.fullFellBack'),
+    '全文の行数上限で畳んだのに、画面に理由を出していない')
 }
 
 // ---------- 7) 基準の据え置き（同じファイルを開き直しても消えない） ----------
@@ -548,7 +696,14 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
     ${grabFn('diffLines')}
     ${grabFn('splitProse')}
     ${grabFn('diffViewMode')}
-    return { splitProse, diffViewMode, choose: (k, v) => { diffProseKey = k; diffProseChoice = v } }
+    let diffRangeKey = null
+    let diffRangeChoice = null
+    ${grabFn('diffRange')}
+    return {
+      splitProse, diffViewMode, diffRange,
+      choose: (k, v) => { diffProseKey = k; diffProseChoice = v },
+      chooseRange: (k, v) => { diffRangeKey = k; diffRangeChoice = v },
+    }
   `)
   const P = proseFactory()
 
@@ -566,6 +721,24 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
   P.choose(pathKeyLower('/w/a.js'), 'prose')
   ok(P.diffViewMode({ path: '/w/a.js' }) === 'prose', 'コードを手動で文章モードにできない')
   P.choose(null, null)
+
+  // 全文 / 変更箇所の既定は「文章モードなら全文・コードモードなら変更箇所」。
+  // ⚠ 拡張子ではなく diffViewMode の結果にぶら下げる（文章モードへ手動で切り替えたコードも
+  //    全文で読めるように＝2つのトグルが噛み合っていないと、片方が効かなく見える）
+  ok(P.diffRange({ path: '/w/a.md' }) === 'full', '.md の既定が全文表示になっていない')
+  ok(P.diffRange({ path: '/w/note.txt' }) === 'full', '.txt の既定が全文表示になっていない')
+  ok(P.diffRange({ path: '/w/a.js' }) === 'changed', 'コードの既定が変更箇所だけになっていない')
+  P.choose(pathKeyLower('/w/a.js'), 'prose')
+  ok(P.diffRange({ path: '/w/a.js' }) === 'full',
+    '手動で文章モードにしたのに全文表示の既定になっていない（2つのトグルが噛み合っていない）')
+  P.choose(null, null)
+  // 手動の選択は自動判定を上書きし、切り替えたファイルにだけ効く（文章／コードと同じ作法）
+  P.chooseRange(pathKeyLower('/w/a.md'), 'changed')
+  ok(P.diffRange({ path: '/w/a.md' }) === 'changed', '手動で変更箇所だけに切り替えられない')
+  ok(P.diffRange({ path: '/w/b.md' }) === 'full', '全文／変更箇所の切替が別のファイルにまで効いている')
+  P.chooseRange(pathKeyLower('/w/a.js'), 'full')
+  ok(P.diffRange({ path: '/w/a.js' }) === 'full', 'コードを手動で全文表示にできない')
+  P.chooseRange(null, null)
 
   // 落とす4つ（本文と本文以外にきれいに割れているか）
   const src = [
@@ -599,27 +772,27 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
   // ---- 描画: 落とした変更を黙って消さない ----
   const A0 = '---\ntitle: 旧\n---\n\n本文はそのまま\n'
   // frontmatter だけ書き換わった＝文章モードでは本文に変更なし。それでも画面を畳まない
-  const only = render(A0, '---\ntitle: 新\n---\n\n本文はそのまま\n', '/w/a.md')
+  const only = render(A0, '---\ntitle: 新\n---\n\n本文はそのまま\n', '/w/a.md', 'changed')
   ok(only.drew === true, '本文以外だけが変わった時に差分ビューを畳んだ（● が点いたのに開くと何も無い）')
   ok(only.html.includes('diff.otherChanges'), '本文以外の変更を件数で知らせていない')
   ok(only.html.includes('diff.proseNone'), '本文に変更が無いことを画面に書いていない')
 
   // 本文も本文以外も変わった時は、本文の差分を出しつつ告知も出す
-  const both = render(A0, '---\ntitle: 新\n---\n\n本文が変わった\n', '/w/a.md')
+  const both = render(A0, '---\ntitle: 新\n---\n\n本文が変わった\n', '/w/a.md', 'changed')
   ok(both.html.includes('class="dline add"') && both.html.includes('diff.otherChanges'),
     '本文の差分と本文以外の告知が両立していない')
 
   // 本文だけ変わった時に、余計な告知を出さない（出しっぱなしだと誰も読まなくなる）
-  const bodyOnly = render(A0, '---\ntitle: 旧\n---\n\n本文が変わった\n', '/w/a.md')
+  const bodyOnly = render(A0, '---\ntitle: 旧\n---\n\n本文が変わった\n', '/w/a.md', 'changed')
   ok(!bodyOnly.html.includes('diff.otherChanges'), '本文以外が変わっていないのに告知を出した')
 
   // ⚠ 空行だけが増減した時も畳まない。生の中身では違う＝● は点いているので、
   //    ここで畳むと「● を見て開いたのに『変更はありません』に飛ばされる」になる
-  const blankOnly = render('本文A\n本文B\n', '本文A\n\n本文B\n', '/w/a.md')
+  const blankOnly = render('本文A\n本文B\n', '本文A\n\n本文B\n', '/w/a.md', 'changed')
   ok(blankOnly.drew === true && blankOnly.html.includes('diff.blankOnly'),
     `空行だけの増減で差分ビューを畳んだ（● が点いているのに何も出ない）: ${JSON.stringify(blankOnly).slice(0, 160)}`)
   // 本当に何も変わっていない時は今までどおり畳む（余計な画面に取り残さない）
-  ok(render('本文A\n', '本文A\n', '/w/a.md').drew === false, '変更が無いのに文章モードで差分ビューを描いた')
+  ok(render('本文A\n', '本文A\n', '/w/a.md', 'changed').drew === false, '変更が無いのに文章モードで差分ビューを描いた')
 
   // コードモード（.js）は今までどおり全部出す＝frontmatter 相当の行も本文の差分に並ぶ
   const code = render('---\ntitle: 旧\n---\nx\n', '---\ntitle: 新\n---\nx\n', '/w/a.js')
@@ -875,5 +1048,5 @@ const pathKeyLower = (p) => String(p || '').toLowerCase()
 
 if (failed) { console.error(`  差分ビューのテスト: ${failed}件 失敗`); process.exit(1) }
 // 観点数は数えて出す（手で書くと足しても増えない＝数字だけ嘘になる）
-console.log(`  差分（開いた時点 → 今）OK (${checks}観点: 追加・削除・置換／省略の境界／サイズガード／空・改行コード／基準のファイル別保持と確認済み／基準の永続化（再起動・容量超過・壊れた保存値）／末尾空行のノイズ除去／文章・コードモード／描画とエスケープ)`)
+console.log(`  差分（開いた時点 → 今）OK (${checks}観点: 追加・削除・置換／省略の境界／サイズガード／空・改行コード／基準のファイル別保持と確認済み／基準の永続化（再起動・容量超過・壊れた保存値）／末尾空行のノイズ除去／文章・コードモード／全文・変更箇所の出し分け／描画とエスケープ)`)
 process.exit(0)

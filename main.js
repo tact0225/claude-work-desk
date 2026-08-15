@@ -717,6 +717,56 @@ ipcMain.on('editor-redo', (event) => event.sender.redo())
 ipcMain.handle('open-path', (_e, p) => shell.openPath(p))
 ipcMain.handle('show-in-folder', (_e, p) => shell.showItemInFolder(p))
 
+// ── ナビゲーションガード ──────────────────────────────────────────────────
+// preload が公開する window.api（ファイルの読み書き・_inbox 投入・OSで開く）は「Desk の画面」に
+// 渡す前提の権限で、ウィンドウが別のページへ遷移すればその権限は遷移先にもそのまま渡る。
+// プレビューには外から来た文字列がそのまま <a> になる経路がある（Markdown の [x](http://…) や
+// file://…、Mermaid の click 命令が生む <a xlink:href>）ので、リンクを1回踏むだけで
+// 「見ず知らずのページに、このPCのファイルを読み書きする手を渡す」ことになっていた。
+// なので既定を「アプリの画面以外への遷移は全部止める」にして、http/https だけ OS の既定ブラウザへ
+// 逃がす（踏んでも何も起きないのは機能低下なので、リンクそのものは捨てない）。
+// ※ [[wikilink]] はここを通らない。renderer 側が preventDefault して IPC で描画を差し替えているだけ
+//   ＝実ナビゲーションではないので、このガードでは壊れない。
+const APP_PAGE = path.join(__dirname, 'renderer', 'index.html')
+
+// アプリ自身の画面か（?クエリ・#ハッシュ付きも同じ画面として通す＝リロード等）
+function isAppPage(url) {
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'file:') return false
+    const norm = (s) => {
+      const d = decodeURIComponent(s)
+      return process.platform === 'win32' ? d.toLowerCase() : d
+    }
+    return norm(u.pathname) === norm(pathToFileURL(APP_PAGE).pathname)
+  } catch {
+    return false
+  }
+}
+
+// ⚠ openExternal に渡してよいのは http / https だけ。file: や javascript:、OS に登録された
+//   任意のカスタムスキームまで無条件に渡すと、「ノートに1行書いておくだけで任意のローカルファイルや
+//   外部ハンドラを起動できる」という別の穴に化ける。ローカルのファイルを開く導線は既存の
+//   api.openPath（ツリーで選んだファイル）が持っているので、ここで肩代わりしない。
+function openExternalIfWeb(url) {
+  let scheme = ''
+  try { scheme = new URL(url).protocol } catch { return }
+  if (scheme === 'http:' || scheme === 'https:') shell.openExternal(url)
+}
+
+function guardNavigation(contents) {
+  contents.on('will-navigate', (e, url) => {
+    if (isAppPage(url)) return // リロード（Ctrl+R / F5）とアプリ内の遷移はそのまま通す
+    e.preventDefault()
+    openExternalIfWeb(url)
+  })
+  // target="_blank" や window.open。新しい窓も preload 付きで開くので、そもそも作らせない
+  contents.setWindowOpenHandler(({ url }) => {
+    openExternalIfWeb(url)
+    return { action: 'deny' }
+  })
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -726,7 +776,10 @@ function createWindow() {
     title: 'claude-work Desk',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  // ⚠ loadFile より前に付ける（後ろだと、最初の1回に間に合わない可能性を残す）。
+  //    loadFile 自体は main からの遷移なので will-navigate を発火させない＝自分で自分を弾かない。
+  guardNavigation(win.webContents)
+  win.loadFile(APP_PAGE)
 }
 
 app.whenReady().then(() => {

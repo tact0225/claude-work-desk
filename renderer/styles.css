@@ -286,6 +286,14 @@ body.resizing.row { cursor: row-resize; }
 }
 .diff-viewmode:hover { border-color: var(--accent); color: var(--accent); }
 .diff-viewmode.prose { color: var(--fg); }
+/* 全文 ⇄ 変更箇所のトグル。見た目は文章／コードのトグルと揃える（隣り合う同じ性質のボタン） */
+.diff-range {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 12px;
+  flex-shrink: 0; font-family: var(--font-ui);
+}
+.diff-range:hover { border-color: var(--accent); color: var(--accent); }
+.diff-range.full { color: var(--fg); }
 /* 文章モードで落とした範囲に変更があった時の告知。無言で消さないための一行なので、
    本文の差分より前（頭）に置いて、色は警告ではなく注記の強さにする */
 .diff-other {
@@ -293,6 +301,8 @@ body.resizing.row { cursor: row-resize; }
   background: rgba(217, 184, 119, 0.09); border-bottom: 1px solid var(--border);
 }
 .diff-note { padding: 32px 24px; color: var(--muted); line-height: 1.9; }
+/* 打ち切り画面の逃げ道の案内。本文より一段弱く、すぐ下に添える */
+.diff-note-sub { margin-top: 6px; font-size: 12px; opacity: 0.85; }
 .diff-body { padding: 6px 0 40px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
 /* 空行でも行の高さを残す（min-height が無いと削除された空行が消えて見える） */
 .dline { display: flex; gap: 8px; padding: 0 14px; min-height: 1.55em; }
@@ -304,6 +314,13 @@ body.resizing.row { cursor: row-resize; }
 .dline.add { background: rgba(80, 210, 120, 0.13); }
 .dline.add .dsign, .dline.add .dtext { color: #7ee0a0; }
 .dline.same .dtext { color: var(--muted); }
+/* 全文表示では無変更行が主役になる（記事を頭から通して読む表示なので、地の文がほとんど
+   無変更行）。薄いままだと本文が読めないので、通常の文字色に戻して赤／緑だけを目立たせる */
+.diff-body.full .dline.same .dtext { color: var(--fg); }
+/* 全文 × 文章モード＝読み物として読む組み合わせ。ここだけ等幅をやめて行間を open にする
+   （桁を揃える必要が無く、日本語の長文を等幅・行間1.55で読ませるのは読み物として苦しい）。
+   コードモードの全文は桁揃えが要るので等幅のまま＝この指定に入れない */
+.diff-body.full.prose { font-family: var(--font-ui); font-size: 13.5px; line-height: 1.9; }
 /* 空行の増減に置く「（空行）」。本文の文字と見分けが付くように弱めて傾ける */
 .dline.blank .dtext { opacity: 0.62; font-style: italic; }
 .dline.gap {
@@ -362,6 +379,16 @@ body.resizing.row { cursor: row-resize; }
 .md-body pre:hover .copy-btn { opacity: 1; }
 .copy-btn:hover { color: var(--fg); border-color: var(--muted); }
 .md-body pre code { background: none; padding: 0; }
+/* ```mermaid の図。コードブロックの箱（背景・枠）を外して図だけ見せる。
+   .pending = まだ描いている（生のソースが一瞬見えるのを防ぐ。付けるのも外すのも app.js 側で、
+   CSS だけで隠すと描画が走らなかった時に図が丸ごと消えたように見える）。
+   .mermaid-failed は class="mermaid" を外して付け替える＝箱つきのコードブロックに戻る */
+.md-body pre.mermaid {
+  background: none; border: none; border-radius: 0; padding: 4px 0;
+  text-align: center; white-space: normal; overflow-x: auto;
+}
+.md-body pre.mermaid.pending { visibility: hidden; }
+.md-body pre.mermaid svg { max-width: 100%; height: auto; }
 .md-body blockquote { border-left: 3px solid var(--border); padding-left: 14px; color: var(--muted); }
 .md-body .table-wrap { overflow-x: auto; margin-bottom: 12px; }
 .md-body .table-wrap table { margin-bottom: 0; }

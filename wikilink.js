@@ -77,11 +77,30 @@ function wikilinkExtension(resolve) {
   }
 }
 
+// ```mermaid のフェンスだけは <pre class="mermaid"> にして、中身を「生の Mermaid ソース」の
+// ままレンダラへ渡す（描画するのは renderer 側の mermaid.js＝main は図を知らない）。
+// ⚠ <code> で包まない。mermaid.run() が拾うのは要素の textContent なので包んでも描けはするが、
+//    描けなかった時に「元のコードブロックへ戻す」判定を renderer 側の1箇所に閉じておきたい。
+// ⚠ エスケープは必須。`A --> B` の `>` や `<br/>` を素通しすると、そこで HTML が始まってしまい
+//    図のソースが壊れる（textContent で読み戻すので、エスケープしてもソースは元に戻る）。
+function mermaidRenderer() {
+  return {
+    code(code, infostring) {
+      const lang = String(infostring || '').trim().split(/\s+/)[0].toLowerCase()
+      if (lang !== 'mermaid') return false // false = 既定のコードブロックに任せる（他の言語は今までどおり）
+      return `<pre class="mermaid">${escapeHtml(code)}</pre>\n`
+    },
+  }
+}
+
 // marked は use() がグローバルに積み上がるので、レンダリングごとに独立インスタンスを作る
 function renderMarkdown(source, mdDir, opts = {}) {
   const { Marked } = require('marked')
   const md = new Marked()
-  md.use({ extensions: [wikilinkExtension(makeResolver(opts.root || '', opts.dirs || [], mdDir))] })
+  md.use({
+    extensions: [wikilinkExtension(makeResolver(opts.root || '', opts.dirs || [], mdDir))],
+    renderer: mermaidRenderer(),
+  })
   return md.parse(source, { async: false })
 }
 

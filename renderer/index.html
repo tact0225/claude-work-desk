@@ -112,6 +112,12 @@
   </div>
 </div>
 <div id="ctxmenu"></div>
+<!-- Mermaid（```mermaid の図）。CDN は使わず同梱物を読む＝ネットに繋がっていなくても描ける。
+     contextIsolation=true で renderer からは require できないので、グローバル（window.mermaid）を
+     作るこのビルド（dist/mermaid.min.js）を素の <script> で読むのが唯一の入口。
+     ⚠ app.js より前に置く。後ろに回すと、起動直後に開いたファイルだけ図が出ない競合になる。
+     読み込みに失敗しても app.js 側が window.mermaid の不在を見てコードブロック表示に落とす -->
+<script src="vendor/mermaid.min.js"></script>
 <script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>

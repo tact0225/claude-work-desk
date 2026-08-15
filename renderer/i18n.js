@@ -683,6 +683,49 @@
       de: 'Code-Modus – alle Zeilen werden verglichen, nichts bleibt außen vor. Klicken für Fließtext-Modus',
       fr: 'Mode code — toutes les lignes sont comparées, rien n’est exclu. Cliquez pour le mode prose',
     },
+    // 全文 / 変更箇所のトグル。ボタンには「今どちらで見ているか」を出す
+    'btn.diffFull': {
+      ja: '全文', en: 'Full text', zh: '全文', ko: '전문',
+      es: 'Texto completo', pt: 'Texto completo', de: 'Volltext', fr: 'Texte intégral',
+    },
+    'btn.diffChanged': {
+      ja: '変更箇所', en: 'Changes only', zh: '仅改动', ko: '변경 부분만',
+      es: 'Solo cambios', pt: 'Só alterações', de: 'Nur Änderungen', fr: 'Modifications seules',
+    },
+    'tip.diffFull': {
+      ja: '全文表示（frontmatter もコードブロックも含めてファイルをそのまま出しています）。赤だけ読めば直す前・緑だけ読めば直した後が通して読めます。押すと変更箇所だけへ',
+      en: 'Full text — the file exactly as it is, frontmatter and code blocks included. Read the red lines for the old version, the green ones for the new. Click to show only the changes',
+      zh: '全文显示——原样列出整个文件，包括 frontmatter 和代码块。只读红色即为修改前，只读绿色即为修改后。点击切换为仅显示改动',
+      ko: '전문 표시 — frontmatter와 코드 블록까지 파일 그대로 보여줍니다. 빨간 줄만 읽으면 이전 버전, 초록 줄만 읽으면 새 버전입니다. 누르면 변경 부분만',
+      es: 'Texto completo: el archivo tal cual, incluidos frontmatter y bloques de código. Lee solo las rojas para la versión anterior y solo las verdes para la nueva. Pulsa para ver solo los cambios',
+      pt: 'Texto completo: o arquivo como está, incluindo frontmatter e blocos de código. Leia as vermelhas para a versão anterior e as verdes para a nova. Clique para ver só as alterações',
+      de: 'Volltext – die Datei genau so, wie sie ist, samt Frontmatter und Codeblöcken. Nur die roten lesen ergibt die alte, nur die grünen die neue Fassung. Klicken für nur die Änderungen',
+      fr: 'Texte intégral — le fichier tel quel, frontmatter et blocs de code compris. Lisez les rouges pour l’ancienne version, les vertes pour la nouvelle. Cliquez pour n’afficher que les modifications',
+    },
+    // ⚠ 行数は {n} で受ける。文言に数字を書き写すと、DIFF_CONTEXT を変えた時にここだけ
+    //    静かに嘘になる（check.sh 9) が見ているのは README/CHANGELOG で、辞書は見ていない）
+    'tip.diffChanged': {
+      ja: '変更箇所だけ（変わった行の前後{n}行を出しています）。押すと全文表示へ',
+      en: 'Changes only — {n} lines of context around each change. Click for the full text',
+      zh: '仅显示改动（每处改动前后各 {n} 行）。点击切换到全文显示',
+      ko: '변경 부분만 (변경 줄 앞뒤 {n}줄). 누르면 전문 표시',
+      es: 'Solo los cambios: {n} líneas de contexto alrededor de cada cambio. Pulsa para el texto completo',
+      pt: 'Só as alterações: {n} linhas de contexto em torno de cada mudança. Clique para o texto completo',
+      de: 'Nur Änderungen – {n} Zeilen Kontext um jede Änderung. Klicken für den Volltext',
+      fr: 'Modifications seules — {n} lignes de contexte autour de chaque changement. Cliquez pour le texte intégral',
+    },
+    // 全文表示が行数の天井に当たって畳んだ側へ落ちた時。黙って畳むと「全文と書いてあるのに
+    // 全文ではない」＝表示そのものが信用されなくなるので、必ず理由を出す
+    'diff.fullFellBack': {
+      ja: '行数が多すぎるため、全文ではなく変更箇所だけを表示しています',
+      en: 'Too many lines for the full text — showing only the changes',
+      zh: '行数过多，因此仅显示改动而非全文',
+      ko: '줄 수가 너무 많아 전문 대신 변경 부분만 표시합니다',
+      es: 'Demasiadas líneas para el texto completo: se muestran solo los cambios',
+      pt: 'Linhas demais para o texto completo — mostrando apenas as alterações',
+      de: 'Zu viele Zeilen für den Volltext – es werden nur die Änderungen gezeigt',
+      fr: 'Trop de lignes pour le texte intégral — seules les modifications sont affichées',
+    },
     // 文章モードで落とした範囲にも変更がある時。無言で消さないための一行
     'diff.otherChanges': {
       ja: '本文以外にも {n}行 の変更があります（コードモードで見られます）',
@@ -744,6 +787,18 @@
       pt: 'A mudança é grande demais para exibir (boa parte do arquivo foi reescrita)',
       de: 'Die Änderung ist zu groß für einen Diff (zu viel der Datei wurde neu geschrieben)',
       fr: 'La modification est trop importante pour être affichée (trop de fichier réécrit)',
+    },
+    // 全文表示で打ち切られた時の逃げ道。「確認済み」だけを脱出路だと思わせない
+    // （押すと基準が今に進む＝読まないまま変更内容を失う）
+    'diff.toobigTryChanged': {
+      ja: '「変更箇所」に切り替えると、絞り込みが効いて出ることがあります',
+      en: 'Switching to "Changes only" narrows what is compared — it may go through',
+      zh: '切换到「仅改动」会缩小比较范围，可能就能显示',
+      ko: '"변경 부분만"으로 바꾸면 비교 범위가 좁아져 표시될 수 있습니다',
+      es: 'Cambiar a «Solo cambios» reduce lo que se compara y puede que sí funcione',
+      pt: 'Mudar para "Só alterações" reduz o que é comparado — pode passar',
+      de: 'Mit „Nur Änderungen“ wird weniger verglichen – damit klappt es womöglich',
+      fr: 'Passer en « Modifications seules » réduit ce qui est comparé — cela peut aboutir',
     },
     'diff.gap': {
       ja: '… {n}行省略 …',

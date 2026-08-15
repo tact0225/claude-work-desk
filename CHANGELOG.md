@@ -2,6 +2,59 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.13.0
+
+**The diff can now show the whole file. Read it top to bottom taking only the red lines and you have the old version; take only the green ones and you have the new one, start to finish.**
+
+### A full text / changes only toggle in the diff view
+
+- The diff view has a new toggle: **Full text** and **Changes only**. **Full text** shows every line, changed or not. **Read down the page taking only the red lines and you get the old version in full**; **take only the green ones and you get the new version in full.**
+- **Why this is needed**: showing only the changed spots tells you *what* was touched, but not **whether the rewrite was any better**. The surrounding text is cut away, so there is nothing to read the two versions against each other with. After an agent rewrites an article, the job is not "review the changes" — it is "**read both through and decide which one is better**", and that needed a view that supports it.
+- **Full text shows the file as it is** — frontmatter, code blocks, image links and blank lines all included. The prose filter (added in v0.11, below) is **not applied to the full text view**: filtered, "full text" would be a lie, because **taking only the green lines would not give you the new version**. Worse, anything filtered out that did not change is not even announced — the view would silently be a false full text. That is also why **the prose/code toggle is hidden while full text is on** (a filter that cannot apply is a button that does nothing when pressed). The filter is a tool for scanning the changes, so it now applies **to changes-only mode alone**.
+- **It is laid out to be read**: in full text, unchanged lines are drawn in the **normal text colour** instead of dim grey (in a full-text view almost every line is unchanged, so dim means unreadable). On top of that, **full text on `.md` and friends drops the monospace font and opens up the line height** — there are no columns to align, and long-form prose in a tight monospace column is punishing to read. Full text on code stays monospace, where alignment does matter.
+- **Unchanged blank lines no longer get a "(blank line)" placeholder.** The placeholder is now only attached to blank lines that were **added or removed**. It used to be decided by the line content alone, so in full text a placeholder appeared at every paragraph break and the article became unreadable — an unchanged blank line should simply stay blank and do its job as a paragraph break.
+- **Changes only** is unchanged: unchanged runs still collapse to `… N unchanged lines …` with 3 lines of context on each side, for checking what was touched at a glance.
+- **The default is full text in prose mode, changes only in code mode.** An article is something you read through; a source file is not. Open a `.md`, `.markdown`, or `.txt` and the full text is there without pressing anything.
+- The choice applies **to that file only** (same rule as the prose/code toggle — made global, "full text" set on an article would follow you into source files). A code file you switched into prose mode by hand also defaults to full text, so the two toggles agree with each other.
+- **There is a ceiling on line count.** Full text draws every line, so the line count becomes the element count on screen. **When the diff would print more than 20,000 lines** (unchanged + red + green) the view falls back to changes only even if full text is selected, **and says so on screen** — it will not freeze quietly, and it will not collapse quietly either (a view that says "full text" and is not would stop being trusted). A Japanese article is orders of magnitude below this; it is a ceiling you meet on a huge log or JSON file.
+- Nothing about how the diff is computed changed — the LCS, how baselines are held, the `●`, and **Reviewed** are all as they were. Two things did change: **whether unchanged lines get collapsed**, and **what gets compared in prose files** (full text skips the filter, so there is more to compare). The view still refuses to open when nothing changed (full text included).
+- ⚠ **Because full text compares more, it can hit "too large to diff"** — the cut-off is about how much is compared, not how it is displayed, so the answer can differ between full text and changes only. An article with a huge code block rewritten wholesale is the case that hits it. **Switching to "Changes only" narrows what is compared and may go through**, so the cut-off screen now says that. ⚠ Pressing **Reviewed** there advances the baseline to now and **you lose the change without ever reading it** — leaving Reviewed as the only visible way out would be showing the most costly action as the only road.
+
+## v0.12.0
+
+**Mermaid diagrams render. A ```mermaid block in a note is a picture in the preview, not twenty lines of arrows to read as text.**
+
+### Mermaid diagrams in the preview
+
+- A fenced ` ```mermaid ` block in a Markdown file is **drawn as a diagram** — flowcharts, sequence diagrams, state diagrams, Gantt charts, everything Mermaid itself supports. Agents write flows as Mermaid because it is text they can edit; until now the preview showed you that text.
+- **Only the rendered view.** Press the source toggle and you get the fence back exactly as it is written, because that is the view you switch to in order to see what is actually in the file. Nothing else about code blocks moved: every other language still renders as the code block it was, with its copy button.
+- **Colours follow the app.** The diagram is drawn from the same palette the rest of the window uses — background, panel, border, accent, text — and the light/dark choice is read from **the actual value of the window's background colour**, not from a setting that could drift out of step with it. Restyle the app and the diagrams follow rather than staying a dark rectangle in a light window.
+- **The font follows the app too, without redrawing.** The font is handed to Mermaid as the CSS variable itself, so changing the UI font under ⚙ moves the text inside diagrams you have already drawn. Handing over the resolved font name instead would have frozen each diagram at whatever font was set when it was drawn.
+- **A diagram that will not parse falls back to the code block** it came from — with its copy button, so you can take the source somewhere and fix it. One bad diagram never blanks the preview, and it is never silently dropped: a diagram you cannot see is a diagram you cannot fix. The same fallback covers the case where the Mermaid bundle itself failed to load.
+- **Mermaid is shipped inside the app** (`renderer/vendor/mermaid.min.js`), never fetched from a CDN. Desk is a tool for reading a workspace that is often on the other side of a VPN or on a machine with no route out; a diagram that only appears when the internet does is not a feature. It is not a runtime dependency either, so the installer does not grow by the 80 MB of build-time packages Mermaid pulls in.
+- The raw source is **hidden while the diagram is being drawn** rather than flashing as text for a moment on every file you open. The hiding is applied by the drawing code itself, so a diagram is never left invisible by a step that did not run.
+
+### Links in the preview can no longer take the window with them
+
+- **Symptom**: clicking a link inside the preview **navigated the Desk window itself** to the external page — a Markdown `[x](http://…)`, a `file://…`, or a link produced by Mermaid's `click` directive, all the same.
+- **Why that matters**: `window.api` — the bridge preload hands the screen for reading and writing files, dropping into `_inbox`, and opening things in the OS — **travels to whatever page the window lands on**. One line of link text in a note was enough to hand a page you have never seen **a working handle on this machine's files**. Measured: on the page it navigated to, `window.api.readFile` was still a function.
+- **Fix**: every navigation away from the app's own screen (`renderer/index.html`) is **blocked**. New windows are refused too (`window.open`, `target="_blank"`) — letting one open would put the same bridge in it.
+- **Links still work.** `http` / `https` are handed to **the OS default browser**. A link that does nothing when you click it is a loss of function, so the link itself was not thrown away.
+- Anything that is **not** `http` / `https` (`file:`, `javascript:`, any scheme registered with the OS) is **not** handed outward. Passing those on unconditionally would turn one line in a note into "launch an arbitrary local file or external handler", which is simply a different hole. Opening local files is still the tree's job.
+- **`[[wikilink]]` is untouched.** It never was a real navigation — it swaps what is rendered — so the guard does not apply to it (verified in the running app). Reload and DevTools are unaffected as well.
+- ⚠ This hole was **not introduced by the Mermaid work**; it had always been there. Mermaid's `click` only added one more door into it.
+
+### License attribution for the bundled Mermaid (`THIRD-PARTY-NOTICES.md`)
+
+- `renderer/vendor/mermaid.min.js` is **a redistribution of Mermaid itself** (MIT, © 2014–2022 Knut Sveidqvist), and it carries DOMPurify (Apache-2.0 / MPL-2.0, © Cure53) among others inside it. Unlike dependencies pulled from npm, this one **ships as a file in the repository and in the installers**, so the copyright notices and license texts have to travel with it.
+- `THIRD-PARTY-NOTICES.md` is new, referenced from `LICENSE` and from both READMEs. It is shipped inside the installers alongside `LICENSE`.
+- Mermaid's own copyright line **is not inside the bundle** — neither `Knut` nor `Sveidqvist` appears anywhere in the file. Shipping the file alone therefore does not satisfy MIT, so the notice and full license text are reproduced in `THIRD-PARTY-NOTICES.md`. Nothing there was written from memory: the notices the bundle carries about itself are transcribed as they are.
+
+### `check.sh` now looks at Mermaid
+
+- Until now the vendored bundle could **disappear and the check would still PASS**. The fallback to a code block is good enough that the app keeps working and only the diagrams stop appearing — which nobody notices. The better the fallback, the more this needs a machine watching it.
+- Three things are checked: (1) the bundle **exists** and is a plausible size (catches truncation and failed downloads); (2) `index.html` actually **loads** it, and loads it **before** `i18n.js` / `app.js` (behind them, the file you open right after launch gets no diagram); (3) `package.json`, the installed `node_modules`, **the version string inside the bundle**, and `THIRD-PARTY-NOTICES.md` all point at **the same release** — so moving one of them without the others fails loudly.
+
 ## v0.11.0
 
 **The diff baseline no longer disappears on you. Close the app, reload it, wander off into another file — what changed while you were away is still there.**

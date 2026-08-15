@@ -1103,7 +1103,9 @@ function renderPreview(res) {
   }
   switch (res.kind) {
     case 'markdown':
-      if (mdMode === 'rendered') { body.innerHTML = `<div class="md-body">${res.html}</div>`; addCopyButtons(body); enhanceTables(body) }
+      // ⚠ 図（renderMermaid）は最後。描画は非同期なので await せず投げっぱなしにする＝
+      //    図が重くても本文は先に出る（描けなくてもその図がコードブロックに戻るだけ）
+      if (mdMode === 'rendered') { body.innerHTML = `<div class="md-body">${res.html}</div>`; addCopyButtons(body); enhanceTables(body); renderMermaid(body) }
       else body.innerHTML = codeView(res.sourceHtml, res.lineCount)
       break
     case 'code':
@@ -1262,9 +1264,15 @@ async function saveEdit() {
 // ⚠ 基準（ベースライン）は「開いた時点」で固定する。自動更新では動かさない＝
 //    5回書き換えられても「開いた時 → 今」がまとめて1画面で見える（ここが機能の肝）。
 
-// 変更行の前後に残す無変更行の数。長い記事で「変更点だけ確認する」のが目的なので、
-// 無変更行を全部出したら意味がない。3行あれば「どの段落の話か」は分かる。
+// 変更行の前後に残す無変更行の数。「変更点だけ確認する」時に使う数字で、
+// 3行あれば「どの段落の話か」は分かる。全文表示（下の DIFF_FULL_MAX_ROWS）では使わない。
 const DIFF_CONTEXT = 3
+
+// 全文表示で描く行数の上限。全文表示は無変更行を1行も畳まないので、行数がそのまま
+// DOM の要素数になる（畳んでいる時は変更の周りしか作らないので効かない天井）。
+// 20,000行 ＝ 日本語の記事なら桁違いに余裕があり、巨大なログやJSONを開いた時だけ当たる。
+// 超えたら畳んだ側へ落として理由を出す（黙って固まるのが一番困る＝打ち切りと同じ考え方）。
+const DIFF_FULL_MAX_ROWS = 20000
 
 // LCS の計算量ガード。素朴なLCSは O(N×M)＝行数の積ぶんのセルを持つので、
 // 全面書き換えのような入力でメモリと時間が一気に膨らむ（＝Deskが固まる）。
@@ -1520,7 +1528,8 @@ function collapseSame(ops, ctx) {
 }
 
 // 基準 → 今 の差分を組む。
-// 返り値: { ok: true, rows, added, removed } / { ok: false, reason: 'toobig' }
+// context に Infinity を渡すと無変更行を1行も畳まない＝全文表示。
+// 返り値: { ok: true, rows, added, removed, fellBack? } / { ok: false, reason: 'toobig' }
 function buildDiff(oldText, newText, context) {
   const ctx = context == null ? DIFF_CONTEXT : context
   const a = diffLines(oldText)
@@ -1552,6 +1561,18 @@ function buildDiff(oldText, newText, context) {
     if (op.kind === 'add') added++
     else if (op.kind === 'del') removed++
   }
+  // 全文表示は畳まない。上から通して読んで、赤だけ拾えば「直す前」・緑だけ拾えば「直した後」が
+  // 頭から終わりまで読める（＝どちらが良いかを読み比べて決めるための表示。変更箇所だけ出すと
+  // 前後が切れて、その判断ができない）。
+  // ⚠ 行数の天井だけは置く。畳まない＝行数がそのまま DOM の要素数になるので、巨大なファイルで
+  //    青天井にすると描画で固まる。当たったら畳んだ側へ落とし、落としたことを呼び出し側に返す
+  //    （黙って畳むと「全文と書いてあるのに全文ではない」＝表示そのものが信用されなくなる）。
+  if (ctx === Infinity) {
+    if (ops.length > DIFF_FULL_MAX_ROWS) {
+      return { ok: true, rows: collapseSame(ops, DIFF_CONTEXT), added, removed, fellBack: true }
+    }
+    return { ok: true, rows: ops, added, removed }
+  }
   return { ok: true, rows: collapseSame(ops, ctx), added, removed }
 }
 
@@ -1572,6 +1593,23 @@ function diffViewMode(res) {
   if (res && diffProseChoice && diffProseKey === pathKey(res.path)) return diffProseChoice
   const p = String((res && res.path) || '').toLowerCase()
   return DIFF_PROSE_EXT.some((ext) => p.endsWith(ext)) ? 'prose' : 'code'
+}
+
+// ---------- 全文 / 変更箇所 ----------
+// 差分に「どこまで出すか」の切り替え（本田さんの決定）。
+//   全文     : 無変更行も全部出す。上から通して読み、赤だけ拾えば直す前・緑だけ拾えば直した後が
+//              読める＝直した方が良くなったかを読み比べて判断するための表示
+//   変更箇所 : 変更の前後 DIFF_CONTEXT 行だけ（従来）。何を触ったかを素早く確かめる表示
+// 既定は文章モードなら全文、コードモードなら変更箇所。記事は通して読むもの・ソースは
+// 頭から全部出しても読まない、という使い方の違いをそのまま既定にしている。
+// ⚠ 手動の選択はファイル単位で覚える（diffProseChoice と同じ理由＝全体に効かせると、
+//    記事で全文にした設定がコードのファイルにも付いて回る）。
+let diffRangeKey = null      // 手動で切り替えたファイル（pathKey）
+let diffRangeChoice = null   // 'full' | 'changed'
+
+function diffRange(res) {
+  if (res && diffRangeChoice && diffRangeKey === pathKey(res.path)) return diffRangeChoice
+  return diffViewMode(res) === 'prose' ? 'full' : 'changed'
 }
 
 // 画像リンクと生HTMLタグ。
@@ -1649,13 +1687,20 @@ function renderDiff(res) {
   const stored = diffBaseOf(res)
   const base = stored === undefined ? res.source : stored
   const mode = diffViewMode(res)
+  const range = diffRange(res)
+  const ctx = range === 'full' ? Infinity : DIFF_CONTEXT
 
   let d
   let otherNote = '' // 文章モードで落とした範囲に変更があった時の告知（無言で消さないための一行）
-  if (mode === 'prose') {
+  // ⚠ 全文表示では文章モードの絞り込みを掛けない＝ファイルそのものを全部出す。
+  //    splitProse は frontmatter・コードブロック・画像リンク・行内の生HTMLタグ・空行を落とすので、
+  //    これを通したまま「全文」と名乗ると、緑だけ拾って読んでも「直した後」の全文にならない
+  //    （落とした側は、変わっていなければ告知すら出ない＝画面に痕跡が残らない）。
+  //    絞り込みは「変更箇所だけを素早く確かめる」ための道具なので、変更箇所モードにだけ効かせる。
+  if (mode === 'prose' && range !== 'full') {
     const a = splitProse(base)
     const b = splitProse(res.source)
-    d = buildDiff(a.body, b.body)
+    d = buildDiff(a.body, b.body, ctx)
     // ⚠ 落とした側は「変わったかどうか」を先に文字列比較で見る。いきなり buildDiff に
     //    渡すと、巨大なコードブロックで打ち切られた時に「変わったのかどうか」すら言えない。
     if (a.other !== b.other) {
@@ -1670,20 +1715,29 @@ function renderDiff(res) {
       otherNote = t('diff.blankOnly')
     }
   } else {
-    d = buildDiff(base, res.source)
+    d = buildDiff(base, res.source, ctx)
   }
   // 変更が無い＝「変更はありません」の画面に取り残さない。差分表示中にレナードが編集を
   // 巻き戻すとここに来る（本文に戻るのにもう一度ボタンを押させるのは「壊れた?」に見える）。
   // ⚠ 本文に変更が無くても、落とした範囲に変更があるなら畳まない。畳むと
   //    「● が点いていたのに開いたら何も無い」＝壊れたようにしか見えない。
-  if (d.ok && !d.rows.length && !otherNote) return false
+  // ⚠ 判定は行数ではなく add/del の件数で見る。全文表示は無変更行も行として持つので、
+  //    rows.length で見ると「変更が無いのに全文が出て、本文へ戻れない」に化ける。
+  if (d.ok && !d.added && !d.removed && !otherNote) return false
 
   let stat = ''
   let inner
   if (!d.ok) {
     // ⚠ ここから抜ける唯一の道は「確認済み」で基準を今に進めること。だから打ち切った時も
     //    差分ビューは畳まず、確認済みボタンを出したまま理由を出す。
-    inner = `<div class="diff-note">${escapeHtml(t('diff.toobig'))}</div>`
+    // ⚠ 全文表示は絞り込みを掛けない＝文章モードのファイルでは、変更箇所に切り替えると
+    //    通ることがある（コードブロックの全書き換えなどは絞り込みで比べる範囲が縮む）。
+    //    ここを案内しないと、画面に出ている脱出路が「確認済み」しか見えず、
+    //    押した人は基準を今に進めてしまう＝読まないまま変更内容を失う
+    const hint = (range === 'full' && mode === 'prose')
+      ? `<div class="diff-note-sub">${escapeHtml(t('diff.toobigTryChanged'))}</div>`
+      : ''
+    inner = `<div class="diff-note">${escapeHtml(t('diff.toobig'))}${hint}</div>`
   } else {
     stat = t('diff.stat', { add: d.added, del: d.removed })
     const parts = []
@@ -1695,7 +1749,10 @@ function renderDiff(res) {
       const sign = row.kind === 'add' ? '+' : (row.kind === 'del' ? '−' : ' ')
       // 空行の増減は「赤／緑の無地の帯が1本出る」だけになり、何が起きたのか読めない。
       // 文字を置いて「空行が消えた／増えた」と分かる形にする（本文中の空行は意味のある変更）
-      const blank = row.text === ''
+      // ⚠ プレースホルダを置くのは増減した空行だけ。無変更の空行に置くと、全文表示で
+      //    段落の切れ目のたびに「（空行）」が並び、記事として読めなくなる（無変更の空行は
+      //    そのまま空けておくのが正しい＝段落の区切りとして働く）
+      const blank = row.text === '' && row.kind !== 'same'
       const text = blank ? t('diff.blank') : row.text
       // ⚠ ファイル本文は必ず escapeHtml を通す。素通しにすると Markdown 中のHTMLが
       //    そのまま描画され、差分の見た目が崩れる（＋任意のタグを差し込める経路になる）
@@ -1706,16 +1763,22 @@ function renderDiff(res) {
     if (!parts.length) inner = `<div class="diff-note">${escapeHtml(t('diff.proseNone'))}</div>`
   }
 
+  // ⚠ 本文側にも「今どの出し方で見ているか」をクラスで残す。全文表示は無変更行が主役に
+  //    なる（読み物として通して読む）ので、無変更行を薄いままにすると本文が読めない＝
+  //    色の当て方が変わる。CSS 側で .diff-body.full / .prose を見ている。
+  const bodyClass = `diff-body ${range === 'full' ? 'full' : 'changed'} ${mode === 'prose' ? 'prose' : 'code'}`
   body.innerHTML = `<div class="diffwrap">
       <div class="diff-head">
         <span class="diff-stat">${escapeHtml(stat)}</span>
         <span class="diff-head-btns">
-          <button class="diff-viewmode"></button>
+          <button class="diff-range"></button>
+          ${range === 'full' ? '' : '<button class="diff-viewmode"></button>'}
           <button class="diff-ack"></button>
         </span>
       </div>
       ${otherNote ? `<div class="diff-other">${escapeHtml(otherNote)}</div>` : ''}
-      <div class="diff-body">${inner}</div>
+      ${d.fellBack ? `<div class="diff-other">${escapeHtml(t('diff.fullFellBack'))}</div>` : ''}
+      <div class="${bodyClass}">${inner}</div>
     </div>`
   // ⚠ ボタンの文言と title は属性に埋め込まず、要素に対して入れる。escapeHtml は
   //    引用符を潰さないので、翻訳に " が混ざった言語を足した瞬間に属性が壊れる
@@ -1724,35 +1787,158 @@ function renderDiff(res) {
   ack.title = t('tip.diffAck')
   ack.addEventListener('click', () => ackDiff(res))
   // 文章 ⇄ コードのトグル。今どちらで見ているかをボタン自身に出す（押す前に分かる）
+  // ⚠ 全文表示のときは出さない。全文はファイルをそのまま出す＝絞り込みが効かないので、
+  //    置いても何も起きないボタンになる（押しても変わらないボタンは「壊れている」に見える）
   const vm = body.querySelector('.diff-viewmode')
-  // ⚠ キーは呼び出しの直後に文字列を置く形で書く。check-i18n.js は t( の直後の文字列しか
-  //    拾えないので、条件式でキーを選ぶ書き方にすると「使われていないキー」に見えて
-  //    未翻訳検知が空振りする（ここで検知の網から漏れると、翻訳漏れが画面まで出る）
-  vm.textContent = mode === 'prose' ? t('btn.diffProse') : t('btn.diffCode')
-  vm.title = mode === 'prose' ? t('tip.diffProse') : t('tip.diffCode')
-  vm.classList.toggle('prose', mode === 'prose')
-  vm.addEventListener('click', () => {
-    diffProseKey = pathKey(res.path)
-    diffProseChoice = mode === 'prose' ? 'code' : 'prose'
+  if (vm) {
+    // ⚠ キーは呼び出しの直後に文字列を置く形で書く。check-i18n.js は t( の直後の文字列しか
+    //    拾えないので、条件式でキーを選ぶ書き方にすると「使われていないキー」に見えて
+    //    未翻訳検知が空振りする（ここで検知の網から漏れると、翻訳漏れが画面まで出る）
+    vm.textContent = mode === 'prose' ? t('btn.diffProse') : t('btn.diffCode')
+    vm.title = mode === 'prose' ? t('tip.diffProse') : t('tip.diffCode')
+    vm.classList.toggle('prose', mode === 'prose')
+    vm.addEventListener('click', () => {
+      diffProseKey = pathKey(res.path)
+      diffProseChoice = mode === 'prose' ? 'code' : 'prose'
+      renderPreview(res)
+    })
+  }
+  // 全文 ⇄ 変更箇所のトグル。文言の作法は上のトグルと同じ（今どちらで見ているかを出す・
+  // キーは t( の直後に文字列を置く＝未翻訳検知が空振りしないように）
+  const rg = body.querySelector('.diff-range')
+  rg.textContent = range === 'full' ? t('btn.diffFull') : t('btn.diffChanged')
+  rg.title = range === 'full' ? t('tip.diffFull') : t('tip.diffChanged', { n: DIFF_CONTEXT })
+  rg.classList.toggle('full', range === 'full')
+  rg.addEventListener('click', () => {
+    diffRangeKey = pathKey(res.path)
+    diffRangeChoice = range === 'full' ? 'changed' : 'full'
     renderPreview(res)
   })
   return true
 }
 
 // レンダリング表示のコードブロックにホバーで出る「コピー」ボタンを付ける
+// ⚠ pre.mermaid は中身が図（SVG）に差し替わるので、ここでは付けない。付けても
+//    描画時に丸ごと消えるうえ、コピーされるのは図の文字だけになって意味がない。
+//    描けなかった図には mermaidFallback() が同じボタンを付け直す（ソースはコピーできる）。
 function addCopyButtons(scope) {
-  for (const pre of scope.querySelectorAll('.md-body pre')) {
-    const text = pre.textContent
-    const btn = document.createElement('button')
-    btn.className = 'copy-btn'
-    btn.textContent = t('btn.copy')
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation()
-      await navigator.clipboard.writeText(text)
-      btn.textContent = t('btn.copied')
-      setTimeout(() => { btn.textContent = t('btn.copy') }, 1500)
+  for (const pre of scope.querySelectorAll('.md-body pre:not(.mermaid)')) addCopyButton(pre)
+}
+
+function addCopyButton(pre) {
+  const text = pre.textContent
+  const btn = document.createElement('button')
+  btn.className = 'copy-btn'
+  btn.textContent = t('btn.copy')
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    await navigator.clipboard.writeText(text)
+    btn.textContent = t('btn.copied')
+    setTimeout(() => { btn.textContent = t('btn.copy') }, 1500)
+  })
+  pre.appendChild(btn)
+}
+
+// ---------- Mermaid（```mermaid の図） ----------
+//
+// main 側（wikilink.js）は ```mermaid を <pre class="mermaid">生ソース</pre> にして渡すだけで、
+// 図にするのはここ。プレビューは innerHTML の差し替えで組み直すので startOnLoad は使わず、
+// 差し替えるたびに自分で描く（startOnLoad は最初の1回しか走らない＝2枚目以降が出なくなる）。
+//
+// 壊れ方の線引き: 図が描けないのは「そのブロックだけの事故」で、プレビュー全体を巻き添えに
+// しない。描けなかった図は消さずに元のコードブロックへ戻す（直すにはソースが要る）。
+let mermaidReady = null // null=未初期化 / true=使える / false=使えない（同梱物が読めていない）
+let mermaidSeq = 0      // SVG の id。ページ内で重複すると別の図を上書きする
+let mermaidGen = 0      // 世代。描いている途中に別のファイルを開かれたら、その回のぶんは捨てる
+
+// 配色が暗いか（--bg の明るさで見る）。読めない書式は「暗い」に倒す＝既定の配色が暗いため
+function isDarkColor(color) {
+  let r, g, b
+  const hex = /^#([0-9a-fA-F]{3,8})$/.exec(String(color).trim())
+  if (hex) {
+    const h = hex[1].length < 6 ? hex[1][0] + hex[1][0] + hex[1][1] + hex[1][1] + hex[1][2] + hex[1][2] : hex[1]
+    r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16)
+  } else {
+    const nums = String(color).match(/[\d.]+/g)
+    if (!nums || nums.length < 3) return true
+    r = +nums[0]; g = +nums[1]; b = +nums[2]
+  }
+  if ([r, g, b].some(n => !isFinite(n))) return true
+  return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+}
+
+// 図の配色を画面の配色に合わせる。このアプリにテーマ切替は無く :root の1枚だけなので、
+// 切替イベントを待つのではなく **その :root の実際の値** から dark / default を選ぶ。
+// ⚠ フォントだけは CSS変数の文字列（var(--font-ui)）をそのまま渡す。SVG は文書の中に置かれる＝
+//    変数が効くので、設定でフォントを変えた時に描き直さなくても図の文字が追随する。
+function initMermaid() {
+  if (mermaidReady !== null) return mermaidReady
+  if (!window.mermaid) { mermaidReady = false; return false }
+  try {
+    const css = getComputedStyle(document.documentElement)
+    const v = (name, fallback) => (css.getPropertyValue(name).trim() || fallback)
+    const bg = v('--bg', '#1e2227')
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict', // 図のソースからスクリプトを実行させない（ワークスペースの md は外から来る）
+      theme: isDarkColor(bg) ? 'dark' : 'default',
+      themeVariables: {
+        background: bg,
+        primaryColor: v('--bg-panel', '#262b33'),
+        primaryTextColor: v('--fg', '#d5dae2'),
+        primaryBorderColor: v('--accent', '#4da3ff'),
+        secondaryColor: v('--bg-side', '#23272e'),
+        lineColor: v('--muted', '#8a93a2'),
+        textColor: v('--fg', '#d5dae2'),
+        fontFamily: 'var(--font-ui)',
+      },
     })
-    pre.appendChild(btn)
+    mermaidReady = true
+  } catch (e) {
+    mermaidReady = false
+  }
+  return mermaidReady
+}
+
+// 描けなかった図は元のコードブロックとして出す（消さない＝直すためにソースが要る）
+function mermaidFallback(pre, src) {
+  const text = src != null ? src : pre.textContent
+  pre.classList.remove('mermaid', 'pending')
+  pre.classList.add('mermaid-failed')
+  pre.textContent = ''
+  const code = document.createElement('code')
+  code.textContent = text
+  pre.appendChild(code)
+  addCopyButton(pre)
+}
+
+async function renderMermaid(scope) {
+  const nodes = [...scope.querySelectorAll('.md-body pre.mermaid')]
+  if (!nodes.length) return
+  const gen = ++mermaidGen
+  // 描き上がるまで生のソースを見せない。⚠ 隠すのは CSS ではなく **ここで付けるクラス**で行う
+  //    ＝この関数が走らなかった時（例外・呼び忘れ）に、図が丸ごと不可視のまま残るのを防ぐ
+  for (const pre of nodes) pre.classList.add('pending')
+  if (!initMermaid()) { for (const pre of nodes) mermaidFallback(pre); return }
+  for (const pre of nodes) {
+    const src = pre.textContent
+    const id = `mermaid-svg-${++mermaidSeq}`
+    try {
+      const out = await window.mermaid.render(id, src)
+      if (gen !== mermaidGen || !pre.isConnected) return // 別のファイルに移った＝この回のぶんは捨てる
+      pre.innerHTML = out.svg
+      pre.classList.remove('pending')
+      pre.classList.add('done')
+      if (typeof out.bindFunctions === 'function') out.bindFunctions(pre)
+    } catch (e) {
+      if (gen !== mermaidGen || !pre.isConnected) return
+      mermaidFallback(pre, src)
+    } finally {
+      // mermaid は採寸用の一時要素を <body> 直下に作る。成功時は自分で片付けるが
+      // 失敗時は残ることがある＝開くたびに増えていくので必ず消す
+      const tmp = document.getElementById('d' + id)
+      if (tmp) tmp.remove()
+    }
   }
 }
 

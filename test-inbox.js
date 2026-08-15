@@ -20,7 +20,8 @@ const stub = {
     on: () => {},
     quit: () => {},
   },
-  BrowserWindow: function () { return { loadFile: () => {} } },
+  // webContents は createWindow がナビゲーションガードを付ける相手。省くと main.js の読み込みで落ちる
+  BrowserWindow: function () { return { loadFile: () => {}, webContents: { on: () => {}, setWindowOpenHandler: () => {} } } },
   ipcMain: { handle: (ch, fn) => { handlers[ch] = fn }, on: () => {} },
   shell: {}, clipboard: {}, dialog: {},
   nativeImage: { createFromDataURL: () => ({}) },
