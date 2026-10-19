@@ -1,6 +1,34 @@
 const $ = (s) => document.querySelector(s)
 
 let CONFIG = null
+const FOLDER_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'gray']
+
+function folderColor(dir) {
+  const entry = Object.entries(CONFIG.folderColors || {}).find(([abs]) => samePath(abs, dir))
+  return entry && FOLDER_COLORS.includes(entry[1]) ? entry[1] : null
+}
+
+function applyFolderColor(label, color) {
+  for (const value of FOLDER_COLORS) label.classList.toggle('label-' + value, value === color)
+  label.classList.toggle('folder-label', !!color)
+}
+
+async function setFolderColor(dir, color) {
+  try {
+    const colorConfig = CONFIG
+    const result = await api.setFolderColor(dir, color)
+    // 返事を待つ間にルートを切り替えた時は、新しい設定・行へ古い返事を当てない。
+    if (CONFIG !== colorConfig) return
+    if (!result.ok) { console.warn('[folder-color]', result.error || dir); return }
+    const colors = { ...(CONFIG.folderColors || {}) }
+    for (const abs of Object.keys(colors)) if (samePath(abs, dir)) delete colors[abs]
+    if (result.color) colors[dir] = result.color
+    CONFIG.folderColors = colors
+    // ⚠ ツリーを読み直さない。選択・スクロール・開閉を残して名前のクラスだけ差し替える。
+    const wrap = nodeByPath.get(pathKey(dir))
+    if (wrap) applyFolderColor(wrap.querySelector('.fname'), result.color)
+  } catch (err) { console.warn('[folder-color]', err) }
+}
 let selectedRow = null
 let currentFile = null
 let mdMode = 'rendered' // 'rendered' | 'source'
@@ -82,6 +110,9 @@ async function init() {
   I18N.setLang(CONFIG.lang)
   I18N.checkMissing((m) => console.warn(m)) // 腐り検知: 翻訳漏れは起動ログに出す
   applyI18n()
+  // ファイルを開いていない時の見出し。窓のタイトルと同じ名前にそろえる（appName）
+  const wh = $('.welcome h2')
+  if (wh && CONFIG.appName) wh.textContent = CONFIG.appName
   refreshInboxLabel()
   applyFonts()
   setupDrop()
@@ -777,6 +808,7 @@ function makeNode(en, depth) {
   const label = document.createElement('span')
   label.className = 'fname'
   label.textContent = en.name
+  if (en.isDir) applyFolderColor(label, folderColor(en.path))
   // 新着ウォッチ（👁）と未読（●）の印。中身が空でも先に置いておく＝
   // 印が付いた時に行の構造を組み替えずテキストの差し替えだけで済む。
   const badge = document.createElement('span')
@@ -1943,12 +1975,21 @@ async function renderMermaid(scope) {
 }
 
 // 表: 横スクロール用ラッパー ＋ ヘッダー境界ドラッグで列幅調整
+// この文字数以下のセルは1行に収める（数字・真偽値・「3→15」程度が対象）。
+// 16 まで広げると店名・カテゴリまで1行化されて幅を食い、長文列が逆に数文字幅まで潰れた＝8が実測の落とし所
+const SHORT_CELL_MAX = 8
 function enhanceTables(scope) {
   for (const table of scope.querySelectorAll('.md-body table')) {
     const wrap = document.createElement('div')
     wrap.className = 'table-wrap'
     table.parentNode.insertBefore(wrap, table)
     wrap.appendChild(table)
+
+    // 短いセル（数字・真偽値・短い名前）は折り返さない。長文列が幅を奪うと
+    // overflow-wrap:anywhere で数字が1文字ずつ縦に積まれて読めなくなるため
+    for (const cell of table.querySelectorAll('th, td')) {
+      if (cell.textContent.trim().length <= SHORT_CELL_MAX) cell.classList.add('cell-short')
+    }
 
     const firstRow = table.querySelector('tr')
     if (!firstRow) continue
@@ -1971,6 +2012,7 @@ function enhanceTables(scope) {
         const widths = headCells.map(c => c.offsetWidth)
         for (let j = 0; j < cols.length; j++) cols[j].style.width = widths[j] + 'px'
         table.style.tableLayout = 'fixed'
+        table.classList.add('col-resized')  // 以後は指定幅を優先し、短いセルも折り返しに戻す
         const startX = e.clientX
         const startW = widths[i]
         document.body.classList.add('resizing')
@@ -2094,6 +2136,19 @@ function showCtxMenu(e, en) {
       { disabled: broad && !on, title: t('watch.refusedRoot') },
     ])
   }
+  if (en.isDir) {
+    const current = folderColor(en.path)
+    const names = {
+      red: t('color.red'), orange: t('color.orange'), yellow: t('color.yellow'),
+      green: t('color.green'), blue: t('color.blue'), purple: t('color.purple'), gray: t('color.gray'),
+    }
+    items.push(['', null, { sep: true }], [t('ctx.folderColor'), null, { head: true }])
+    for (const color of FOLDER_COLORS) {
+      items.push([(current === color ? '✓ ' : '') + names[color],
+        () => setFolderColor(en.path, color), { swatch: color }])
+    }
+    if (current) items.push([t('color.none'), () => setFolderColor(en.path, null), { swatch: 'none' }])
+  }
   showMenu(e, items)
 }
 
@@ -2115,6 +2170,12 @@ function showMenu(e, items) {
     const it = document.createElement('div')
     it.className = 'ctxitem' + (opt && opt.disabled ? ' disabled' : '')
     it.textContent = labelText
+    if (opt && opt.swatch) {
+      const swatch = document.createElement('span')
+      swatch.className = 'ctxswatch' + (opt.swatch === 'none' ? '' : ' label-' + opt.swatch)
+      swatch.setAttribute('aria-hidden', 'true')
+      it.prepend(swatch)
+    }
     if (opt && opt.title) it.title = opt.title
     if (opt && opt.disabled) it.addEventListener('click', (ev) => ev.stopPropagation()) // 閉じずに理由（title）を読ませる
     else it.addEventListener('click', () => { hideCtxMenu(); fn() })

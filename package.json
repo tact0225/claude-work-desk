@@ -1,6 +1,6 @@
 {
   "name": "claude-work-desk",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "A file-handoff desk between your Claude Code workspace and your desktop, on Windows/WSL and macOS: tree, preview, and an _inbox drop window",
   "main": "main.js",
   "scripts": {
@@ -28,6 +28,7 @@
       "main.js",
       "preload.js",
       "wikilink.js",
+      "folder-color.js",
       "config.json",
       "renderer/**",
       "LICENSE",

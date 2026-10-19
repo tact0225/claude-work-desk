@@ -56,7 +56,37 @@ nohup "\$BIN" . >/dev/null 2>&1 &
 EOF
 chmod +x "$LAUNCHER"
 
+# Dock に置ける .app。node_modules の Electron.app を丸ごと複製し（APFS は clone＝容量ほぼゼロ）、
+# Resources/app → この checkout へのシンボリックリンクにする＝Electron がここの main.js を読む。
+# electron-builder の配布物と違い中身を焼き込まないので「pull だけで反映」の Mac 作法を崩さない。
+# 素の Electron.app を Dock に置くと Electron の空アプリが立ち上がるだけ（2026-10-10 実際に踏んだ）。
+# Electron を上げたら本スクリプトを再実行（複製元が変わるため）。
+APP="$HOME/Applications/claude-work Desk.app"
+EAPP="$SRC/node_modules/electron/dist/Electron.app"
+echo "==> $APP を生成"
+mkdir -p "$HOME/Applications"
+rm -rf "$APP"
+cp -cR "$EAPP" "$APP" 2>/dev/null || cp -R "$EAPP" "$APP"
+rm -f "$APP/Contents/Resources/default_app.asar"
+ln -s "$SRC" "$APP/Contents/Resources/app"
+ICONSET="$(mktemp -d)/desk.iconset"
+mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+  sips -z $s $s "$SRC/build/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s*2)) $((s*2)) "$SRC/build/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/desk.icns"
+PL="$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName claude-work Desk" \
+  -c "Set :CFBundleDisplayName claude-work Desk" \
+  -c "Set :CFBundleIdentifier com.tact0225.claude-work-desk.dev" \
+  -c "Set :CFBundleIconFile desk.icns" "$PL"
+# Info.plist を書き換えると署名が壊れる＝arm64 は無署名だと起動拒否されるので ad-hoc で署名し直す
+codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "WARN: codesign に失敗（起動できない時は再実行）"
+touch "$APP"
+
 echo ""
-echo "==> 完了。デスクトップの「claude-work Desk」をダブルクリックで起動できます"
+echo "==> 完了。~/Applications の「claude-work Desk」を Dock に置けばそこから起動できます"
+echo "    （デスクトップの「claude-work Desk」ダブルクリックでも起動できます）"
 echo "    初回起動時にワークスペースフォルダを選んでください（設定は git pull しても保持されます）"
 echo "    更新: git pull するだけ（依存が変わった時だけ本スクリプトを再実行）"

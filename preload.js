@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron')
 contextBridge.exposeInMainWorld('api', {
   getConfig: () => ipcRenderer.invoke('get-config'),
   setLang: (lang) => ipcRenderer.invoke('set-lang', lang),
+  setFolderColor: (dir, color) => ipcRenderer.invoke('set-folder-color', dir, color),
   setInbox: (name) => ipcRenderer.invoke('set-inbox', name),
   chooseRoot: () => ipcRenderer.invoke('choose-root'),
   // ⚠ chooseRoot とは別物。こちらはパスを返すだけでワークスペース（_inboxの置き場）を変えない

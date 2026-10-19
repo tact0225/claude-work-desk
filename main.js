@@ -4,7 +4,15 @@ const fs = require('fs')
 const fsp = fs.promises
 const { pathToFileURL } = require('url')
 const i18n = require('./renderer/i18n')
+const { COLORS, storeFolderDir, resolveFolderDir } = require('./folder-color')
 const t = (key, vars) => i18n.t(key, vars)
+
+// ⚠ userData を読み取るより前に設定し直す。user-config.json・ドロップ履歴・タブの記憶
+//    （localStorage）はすべて userData の下にあるので、ここを分ければ全部が分かれる。
+const argProfile = (process.argv.find(a => a.startsWith('--profile=')) || '').slice(10)
+const PROFILE = /^[a-z0-9-]{1,32}$/.test(argProfile) ? argProfile : ''
+if (argProfile && !PROFILE) console.warn(`--profile=${argProfile} は無効な名前。プロファイル無しで起動`)
+if (PROFILE) app.setPath('userData', path.join(app.getPath('appData'), 'claude-work-desk-' + PROFILE))
 
 const DEFAULTS = {
   root: '',
@@ -24,6 +32,12 @@ const DEFAULTS = {
   watchDirs: ['_outbox'],
   // 未読ファイルの集合（設定ではなく状態だが、再起動をまたいで残す仕様なので同じ入れ物に置く）
   unread: [],
+  // フォルダ名の色。ルート配下は相対キーで持ち、引っ越しても同じ場所に付ける。
+  folderColors: {},
+  // 窓のタイトルと、ファイルを開いていない時の見出しに出す名前。'' = 'claude-work Desk'。
+  // ⚠ 既定（config.json）には焼かない。別のワークスペース用に --profile で立てた Desk を
+  //    見分けるための PC 固有の名前なので、そのプロファイルの user-config.json に書く。
+  appName: '',
 }
 let config = { ...DEFAULTS }
 
@@ -106,10 +120,48 @@ ipcMain.handle('get-config', () => ({
   inbox: rootDir() ? inboxDir() : '',
   inboxName: config.inbox,
   hidden: config.hidden,
+  folderColors: folderColorMap(),
   fontUi: config.fontUi || '',
   fontMono: config.fontMono || '',
   version: app.getVersion(),
+  appName: appName(),
 }))
+
+// renderer には絶対パスで渡す。choose-root 後も、その時の root で解決し直す。
+function folderColorMap() {
+  const out = {}
+  for (const [stored, color] of Object.entries(config.folderColors || {})) {
+    const abs = resolveFolderDir(config.root, stored)
+    if (abs && COLORS.includes(color)) out[abs] = color
+  }
+  return out
+}
+
+ipcMain.handle('set-folder-color', async (event, dir, color) => {
+  if (typeof dir !== 'string') return { ok: false }
+  // ⚠ 外す指示は null だけ。パレット外の値を「外す」扱いにすると、呼び出し側の綴り間違いが
+  //    付いている色を黙って消す（QA指摘）。
+  if (color != null && !COLORS.includes(color)) return { ok: false }
+  const colorRoot = config.root
+  const stored = storeFolderDir(colorRoot, dir)
+  if (!stored) return { ok: false }
+  try {
+    if (!(await fsp.stat(dir)).isDirectory() || config.root !== colorRoot) return { ok: false }
+    const next = Object.assign(Object.create(null), config.folderColors || {})
+    // ⚠ 大小文字・区切り違いの古いキーも消す。色を外すたびにゴミが残るのを防ぐ。
+    for (const old of Object.keys(next)) {
+      const abs = resolveFolderDir(config.root, old)
+      if (abs && pathKey(abs) === pathKey(dir)) delete next[old]
+    }
+    const value = color == null ? null : color
+    if (value) next[stored] = value
+    saveUserConfig({ folderColors: next })
+    config.folderColors = next
+    return { ok: true, color: value }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
 
 // ドロップ先フォルダ（既定 _inbox）はワークスペース内の相対パスに限定する。
 // 外を許すと「レーンを覗いていても投入先は動かない」という不変条件が意味を失うため、
@@ -767,15 +819,29 @@ function guardNavigation(contents) {
   })
 }
 
+function appName() {
+  if (typeof config.appName === 'string' && config.appName.trim()) return config.appName.trim()
+  return PROFILE ? `claude-work Desk [${PROFILE}]` : 'claude-work Desk'
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
     backgroundColor: '#1e2227',
     autoHideMenuBar: true,
-    title: 'claude-work Desk',
+    title: appName(),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   })
+  // ⚠ renderer/index.html の <title> が読み込み時にウィンドウタイトルを上書きする。
+  //    プロファイル時・appName 指定時は appName() を保つため上書きを止める（普通の起動は変えない）。
+  if (PROFILE || config.appName) win.on('page-title-updated', (e) => e.preventDefault())
+  // プロファイルごとの見分けはアイコンでも付ける。userData/icon.png を置いた時だけ効く
+  // （PC固有の見た目なので repo には置かない。無ければ今まで通り）
+  if (PROFILE) {
+    const icon = path.join(app.getPath('userData'), 'icon.png')
+    if (fs.existsSync(icon)) win.setIcon(icon)
+  }
   // ⚠ loadFile より前に付ける（後ろだと、最初の1回に間に合わない可能性を残す）。
   //    loadFile 自体は main からの遷移なので will-navigate を発火させない＝自分で自分を弾かない。
   guardNavigation(win.webContents)

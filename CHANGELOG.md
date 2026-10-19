@@ -2,6 +2,27 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.14.0
+
+**Give folder names a color, so todo and company are easy to spot in the tree.**
+
+### Folder color labels from the right-click menu
+
+- Right-click a folder → **Folder color** to choose red, orange, yellow, green, blue, purple or gray. A swatch previews each color, a check marks the current one, and **None (remove color)** clears it.
+- Only the folder name gets a translucent rounded background. Selection, unread marks and long-name ellipsis still work. Applying a color updates that name in place, keeping your scroll position and selection; newly expanded folders get their saved colors too.
+- Colors live in your `userData/user-config.json`, separate from the bundled defaults. Folders inside the workspace use relative paths with `/` separators so labels follow a workspace move and tolerate Windows/WSL separator differences; folders outside it use absolute paths. Changing the workspace resolves relative labels against the new root, and removing a color deletes its key.
+
+## v0.13.1
+
+**Tables now use the full window width. Numbers no longer stack vertically.**
+
+### Tables break out of the 880px text column
+
+- The preview keeps prose in an 880px centred column for readability, but tables were confined to it too: on a wide screen a table sat between large empty margins with its columns squeezed, and numeric columns came out as "30 / 80", one piece per line. **Tables alone now break out of that column and can grow to the full window width** (paragraphs, headings and code stay at 880px).
+- A table only grows as wide as its content needs (a small table stays centred; a many-column table uses the whole width). Anything that still does not fit scrolls horizontally, as before.
+- As insurance for narrow windows, **cells of 8 characters or fewer** (numbers, `False`, `3→15` and the like) stay on one line. Long cells wrap as before. Raising the threshold (so that shop names and categories also stay on one line) made those columns take the width instead, squeezing the long-text column down to a few characters and making rows tall, so the threshold is 8.
+- A table whose column widths you dragged by hand keeps the widths you set, and short cells go back to wrapping there (so a number longer than the width you chose does not spill into the next cell).
+
 ## v0.13.0
 
 **The diff can now show the whole file. Read it top to bottom taking only the red lines and you have the old version; take only the green ones and you have the new one, start to finish.**

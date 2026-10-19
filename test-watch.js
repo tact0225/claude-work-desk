@@ -424,7 +424,7 @@ const TAB_FNS = ['newTab', 'resetTabTo', 'tabLabel', 'saveTabs', 'loadTabs', 'ca
   // パス欄の履歴（▾）。積む場所を間違えると静かに壊れる（タブ切替で汚れる／上限が外れる）
   'pathHistory', 'pushPathHistory', 'togglePathHist', 'hidePathHist',
   // ツリーの行そのもの。フォルダとファイルでダブルクリックの扱いが違う
-  'makeNode', 'fileIcon']
+  'makeNode', 'fileIcon', 'folderColor', 'applyFolderColor', 'setFolderColor']
 
 // 仮想ファイルシステム。キーがフォルダ、値が直下の名前（キーに無い名前＝ファイル）
 const VFS = {
@@ -463,6 +463,7 @@ function makeTabHarness() {
       appendChild(c) { this.children.push(c); return c },
       insertBefore(c, ref) { const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); return c },
       querySelectorAll() { return [] },
+      querySelector(sel) { return this.children.flatMap(child => child.children).find(child => child.className === sel.slice(1)) },
       remove() {},
       classList: {
         add: (c) => cls.add(c), remove: (c) => cls.delete(c),
@@ -483,6 +484,7 @@ function makeTabHarness() {
   const factory = new Function('ctx', `
     'use strict'
     const TABS_KEY = 'tabs'
+    ${APP_SRC.match(/^const FOLDER_COLORS = .*$/m)[0]}
     const PATH_HIST_MAX = 20
     let CONFIG = ctx.config
     let tabs = [], activeTab = 0, tabsLoaded = false
@@ -538,6 +540,7 @@ function makeTabHarness() {
       },
       listWorktrees: async () => { bump('listWorktrees'); if (ctx.lanesThrow) throw new Error('lane boom'); return ctx.lanes || [] },
       openPath: (p) => { bump('openPath'); ctx.opened = p },
+      setFolderColor: async (dir, color) => { bump('setFolderColor'); return { ok: true, color } },
       dragStart: () => bump('dragStart'),
       showInFolder: () => bump('showInFolder'),
     }
@@ -758,6 +761,38 @@ async function testTabOps() {
   ok(h.pathHistory().length === 0, '「履歴を消す」で履歴が消えていない')
   h.togglePathHist()
   ok(box.children.length === 1 && box.children[0].className === 'hist-empty', '履歴が空の時の表示が出ていない')
+
+  // 色は行を作り直さず名前へ当てる。新しく生える行も同じ設定を見る。
+  h = makeTabHarness()
+  h.ctx.config.folderColors = { 'c:/WS/docs': 'red' }
+  const colorDir = { name: 'docs', isDir: true, path: 'C:\\ws\\docs' }
+  const colorWrap = h.makeNode(colorDir, 0)
+  const colorLabel = colorWrap.children[0].children[2]
+  ok(colorLabel.classList.contains('label-red'), '表記差のある保存色が新しいフォルダ行に付かない')
+  const colorEvent = { preventDefault() {} }
+  h.showCtxMenu(colorEvent, colorDir)
+  let colorItems = h.ctx.menu
+  const headIndex = colorItems.findIndex(item => item[0] === 'ctx.folderColor')
+  ok(headIndex > 0 && colorItems[headIndex][2].head && colorItems[headIndex - 1][2].sep,
+    'フォルダ色の入口が区切り→見出しになっていない')
+  ok(colorItems.filter(item => item[2] && item[2].swatch && item[2].swatch !== 'none').length === 7,
+    '固定7色の色見本が揃っていない')
+  ok(colorItems.some(item => item[0] === '✓ color.red'), '現在の色にチェックが付かない')
+  const rowBefore = colorWrap.children[0]
+  rowBefore.classList.add('selected')
+  const loadsBefore = h.ctx.calls.loadTreeRoot || 0
+  await colorItems.find(item => item[2] && item[2].swatch === 'blue')[1]()
+  ok(colorLabel.classList.contains('label-blue') && !colorLabel.classList.contains('label-red'), '設定直後に色クラスが差し替わらない')
+  ok(colorWrap.children[0] === rowBefore && rowBefore.classList.contains('selected') && (h.ctx.calls.loadTreeRoot || 0) === loadsBefore,
+    '色の設定で行やツリーを作り直している／選択を失っている')
+  ok(h.makeNode(colorDir, 0).children[0].children[2].classList.contains('label-blue'), '後から作る行に変更後の色が付かない')
+  h.showCtxMenu(colorEvent, colorDir)
+  await h.ctx.menu.find(item => item[0] === 'color.none')[1]()
+  ok(Object.keys(h.ctx.config.folderColors).length === 0, '解除後も renderer にキーが残る')
+  h.showCtxMenu(colorEvent, colorDir)
+  ok(!h.ctx.menu.some(item => item[0] === 'color.none'), '色なしでも解除項目を出している')
+  h.showCtxMenu(colorEvent, { name: 'file.md', isDir: false, path: 'C:\\ws\\file.md' })
+  ok(!h.ctx.menu.some(item => item[0] === 'ctx.folderColor'), 'ファイルのメニューにフォルダ色が出る')
 
   // 12.7) ★ツリー行のダブルクリック。フォルダ＝タブで開く（右クリックメニューと同じ addTab を通す）／
   //       ファイル＝今までどおり既定のアプリで開く。以前ここでエクスプローラーが開いていたのは不要と明示

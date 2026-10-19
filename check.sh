@@ -8,7 +8,7 @@ FAIL=0
 note() { echo "  $1"; }
 fail() { echo "NG  $1"; FAIL=1; }
 
-JS_FILES="main.js preload.js wikilink.js renderer/app.js renderer/i18n.js"
+JS_FILES="main.js preload.js wikilink.js folder-color.js renderer/app.js renderer/i18n.js"
 
 # 1) 構文
 for f in $JS_FILES; do
@@ -143,7 +143,7 @@ fi
 MERMAID_VENDOR=renderer/vendor/mermaid.min.js
 MERMAID_MIN_BYTES=2000000 # 実体は約3.5MB。半分を切ったら「取得に失敗した残骸」を疑う
 if [ ! -f "$MERMAID_VENDOR" ]; then
-  fail "Mermaid の同梱物がありません: $MERMAID_VENDOR（図は黙ってコードブロック表示に戻る）"
+  fail "Mermaid の同梱物がありません: ${MERMAID_VENDOR}（図は黙ってコードブロック表示に戻る）"
 else
   MERMAID_BYTES=$(wc -c < "$MERMAID_VENDOR" | tr -d ' ')
   if [ "$MERMAID_BYTES" -lt "$MERMAID_MIN_BYTES" ]; then
@@ -160,7 +160,7 @@ else
   elif [ -z "$L_I18N" ] || [ -z "$L_APP" ]; then
     fail "renderer/index.html の i18n.js / app.js の <script> を読めません（check.sh 10) も直す）"
   elif [ "$L_MERMAID" -gt "$L_I18N" ] || [ "$L_MERMAID" -gt "$L_APP" ]; then
-    fail "vendor/mermaid.min.js は i18n.js / app.js より前に置く（行 $L_MERMAID / i18n $L_I18N / app $L_APP）"
+    fail "vendor/mermaid.min.js は i18n.js / app.js より前に置く（行 $L_MERMAID / i18n $L_I18N / app ${L_APP}）"
   fi
   # バージョン整合。同梱物は npm の mermaid を固めたもの＝「package.json だけ動いて vendor が
   # 古いまま」を無検知にしない。バンドルの中には mermaid 自身の version 文字列が入っているので、
@@ -183,8 +183,11 @@ else
       fail "THIRD-PARTY-NOTICES.md が mermaid $PKG_MERMAID を指していません（同梱物を上げたら帰属表示も直す）"
     fi
   fi
-  [ $FAIL -eq 0 ] && note "Mermaid 同梱物 OK ($((MERMAID_BYTES / 1024 / 1024))MB・v$PKG_MERMAID・i18n/app より前・帰属表示あり)"
+  [ $FAIL -eq 0 ] && note "Mermaid 同梱物 OK ($((MERMAID_BYTES / 1024 / 1024))MB・v${PKG_MERMAID}・i18n/app より前・帰属表示あり)"
 fi
+
+# 11) フォルダ色の保存キー（相対化・解決・表記差）
+node test-folder-color.js || fail "フォルダ色の保存／解決が壊れている"
 
 echo
 [ $FAIL -eq 0 ] && { echo "check.sh: PASS"; exit 0; } || { echo "check.sh: FAIL"; exit 1; }
