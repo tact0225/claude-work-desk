@@ -588,10 +588,12 @@ body.resizing.row { cursor: row-resize; }
 
 /* 検索はプレビュー本文を所有しない。Highlight の色だけを重ねる。 */
 ::highlight(desk-find) { background-color: #ffdb5366; color: inherit; }
-::highlight(desk-find-current) { background-color: #ff9235cc; }
+/* 今いる一致は暗めのオレンジ＋白文字。明るいオレンジ（旧 #ff9235）だと地の明るい文字色と
+   差が出ず、文字が判別しにくかった（本田さん実機指摘 2026-10-22）。白との差は約6:1 */
+::highlight(desk-find-current) { background-color: #a8470c; color: #fff; }
 /* PDF の文字は下の描画（canvas）側にあり、textLayer は透明な文字を重ねているだけ。濃い色を
    重ねると肝心の文字が塗りつぶされて読めなくなるので、PDF の上だけ半透明にする */
-.textLayer ::highlight(desk-find-current) { background-color: #ff923573; }
+.textLayer ::highlight(desk-find-current) { background-color: #c2570c59; color: transparent; }
 .textLayer ::highlight(desk-find) { background-color: #ffdb5359; }
 #workspace-search { width: 290px; min-width: 160px; max-width: 34vw; flex-shrink: 1; padding: 6px 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 5px; }
 #find-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); }

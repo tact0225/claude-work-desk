@@ -2,6 +2,13 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.15.1
+
+**The current search match is now a darker orange, so the matched text stays readable.**
+
+- The current match uses a darker orange background with white text. The previous bright orange gave too little contrast with the light body text (white on the new orange is about 6:1).
+- On PDFs it stays translucent (slightly darker) so the page text rendered underneath shows through.
+
 ## v0.15.0
 
 **Search folder contents, then follow the exact match in the preview and return to the saved results.**
