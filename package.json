@@ -1,6 +1,6 @@
 {
   "name": "claude-work-desk",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "A file-handoff desk between your Claude Code workspace and your desktop, on Windows/WSL and macOS: tree, preview, and an _inbox drop window",
   "main": "main.js",
   "scripts": {
@@ -15,7 +15,9 @@
   "dependencies": {
     "highlight.js": "^11.9.0",
     "mammoth": "^1.7.2",
-    "marked": "^12.0.2"
+    "marked": "^12.0.2",
+    "pdfjs-dist": "^5.4.530",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "build": {
     "appId": "com.tact0225.claude-work-desk",
@@ -27,10 +29,13 @@
     "files": [
       "main.js",
       "preload.js",
+      "search-worker.js",
+      "search-engine.js",
       "wikilink.js",
       "folder-color.js",
       "config.json",
       "renderer/**",
+      "!node_modules/@napi-rs/**",
       "LICENSE",
       "THIRD-PARTY-NOTICES.md"
     ],

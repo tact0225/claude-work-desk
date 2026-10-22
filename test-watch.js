@@ -273,6 +273,7 @@ function makeHarness(cfg) {
     let pollIdle = true, lastPollAt = 0, lastPollError = ''
     let CONFIG = null, browseRoot = '', currentFile = null, previewMtime = null
     let editMode = false, externalChange = false, treeEpoch = 0, rootBox = null
+    let resultsVisible = false, previewOpenEpoch = 0
     let tabs = [], activeTab = 0, tabsLoaded = false
     const TABS_KEY = 'tabs'
     const { api, document, localStorage, t, I18N, $, console, setTimeout, clearTimeout, bump } = ctx
@@ -281,6 +282,7 @@ function makeHarness(cfg) {
     const applyFonts = () => bump('applyFonts')
     const setupDrop = () => bump('setupDrop')
     const setupGlobal = () => bump('setupGlobal')
+    const setupSearch = () => bump('setupSearch')
     const setupPathBar = () => bump('setupPathBar')
     const setupTabs = () => bump('setupTabs')
     const renderTabs = () => bump('renderTabs')
@@ -309,6 +311,7 @@ function makeHarness(cfg) {
       setConfig: (c) => { CONFIG = c }, // init を通さずポーリング単体を叩く時用
       setPreview: (f, m) => { currentFile = f; previewMtime = m },
       setEdit: (v) => { editMode = v },
+      setResults: (v) => { resultsVisible = v },
       setExternal: (v) => { externalChange = v },
     }
   `)
@@ -1026,6 +1029,12 @@ async function testPreviewGuard() {
   h.setEdit(false)
   await h.refreshPreview({ gone: true })
   ok(!h.ctx.calls.readFile, '消えたファイルを読み直そうとしている')
+
+  // 検索結果を見ている間は、自動更新で本文へ戻さない。
+  h.setResults(true)
+  await h.refreshPreview({ mtimeMs: 2000, size: 30 })
+  ok(!h.ctx.calls.readFile, '検索結果を自動更新が押しのけている')
+  h.setResults(false)
 
   // 通常時は読み直す。スクロール位置は先頭に戻さない（左ペインで追記を追える）
   h.setPreview({ path: 'C:\\ws\\a.md', size: 10 }, 1000)

@@ -379,6 +379,73 @@ async function readDirEntries(dirPath) {
 
 ipcMain.handle('read-dir', (_e, dirPath) => readDirEntries(dirPath))
 
+// 検索と Excel 解析は常駐 Worker に寄せ、重いブックでも main の IPC を止めない。
+const { Worker } = require('worker_threads')
+let searchWorker = null
+let searchSequence = 0
+let runningSearch = null
+const sheetRequests = new Map()
+function getSearchWorker() {
+  if (searchWorker) return searchWorker
+  const worker = new Worker(path.join(__dirname, 'search-worker.js'))
+  searchWorker = worker
+  worker.on('message', event => {
+    if (event.type === 'sheet') {
+      const request = sheetRequests.get(event.id)
+      if (request) {
+        sheetRequests.delete(event.id)
+        if (event.error) request.reject(new Error(event.error))
+        else request.resolve(event.sheets)
+      }
+    } else if (runningSearch && event.id === runningSearch.id) {
+      if (!runningSearch.sender.isDestroyed()) runningSearch.sender.send('search-event', event)
+      if (event.type === 'done') runningSearch = null
+    }
+  })
+  function failed(err) {
+    if (searchWorker !== worker) return
+    searchWorker = null
+    for (const request of sheetRequests.values()) request.reject(err)
+    sheetRequests.clear()
+    if (runningSearch && !runningSearch.sender.isDestroyed()) {
+      runningSearch.sender.send('search-event', { type: 'done', id: runningSearch.id, failed: 1, error: err.message })
+    }
+    runningSearch = null
+  }
+  worker.on('error', failed)
+  worker.on('exit', code => failed(new Error(t('search.workerExited', { code }))))
+  return worker
+}
+function cancelSearch() {
+  if (runningSearch) Atomics.store(runningSearch.flag, 0, 1)
+}
+ipcMain.handle('search-start', (event, request) => {
+  cancelSearch()
+  const root = path.resolve(String(request.root || ''))
+  const home = require('os').homedir()
+  // isTooBroad はウォッチ専用で root 自身も禁止する。検索は root 自身を許すが祖先は禁止。
+  if (!request.root || !config.root || pathKey(root) === pathKey(path.parse(root).root) ||
+      pathKey(root) === pathKey(home) || (isTooBroad(root) && pathKey(root) !== pathKey(config.root))) {
+    return { error: 'broad' }
+  }
+  const id = ++searchSequence
+  const flag = new Int32Array(new SharedArrayBuffer(4))
+  runningSearch = { id, flag, sender: event.sender }
+  getSearchWorker().postMessage({ type: 'search', id, flag: flag.buffer, root, query: String(request.query || ''), kinds: Array.isArray(request.kinds) ? request.kinds.filter(kind => ['text', 'sheet', 'pdf', 'word'].includes(kind)) : [] })
+  return { id }
+})
+ipcMain.handle('search-cancel', (_event, id) => {
+  if (runningSearch?.id === id) cancelSearch()
+})
+app.on('before-quit', () => { cancelSearch(); if (searchWorker) searchWorker.terminate() })
+function readSheets(filePath) {
+  return new Promise((resolve, reject) => {
+    const id = ++searchSequence
+    sheetRequests.set(id, { resolve, reject })
+    getSearchWorker().postMessage({ type: 'sheet', id, path: filePath })
+  })
+}
+
 ipcMain.handle('read-file', async (_e, filePath) => {
   const ext = path.extname(filePath).toLowerCase()
   const stat = await fsp.stat(filePath)
@@ -388,6 +455,11 @@ ipcMain.handle('read-file', async (_e, filePath) => {
 
   if (IMG_EXT.includes(ext)) return { ...base, kind: 'image', url: pathToFileURL(filePath).href }
   if (ext === '.pdf') return { ...base, kind: 'pdf', url: pathToFileURL(filePath).href }
+  if (['.xlsx', '.xlsm', '.xls'].includes(ext)) {
+    if (stat.size > 30 * 1024 * 1024) return { ...base, kind: 'toolarge', maxMB: 30 }
+    try { return { ...base, kind: 'sheet', sheets: await readSheets(filePath) } }
+    catch (err) { return { ...base, kind: 'error', message: err.message } }
+  }
   if (ext === '.docx') {
     try {
       const mammoth = require('mammoth')

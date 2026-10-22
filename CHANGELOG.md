@@ -2,6 +2,21 @@
 
 [日本語版はこちら / Japanese version](CHANGELOG.ja.md)
 
+## v0.15.0
+
+**Search folder contents, then follow the exact match in the preview and return to the saved results.**
+
+### Workspace search and find in file
+
+- Search beside the path field (Cmd/Ctrl+Shift+F → Enter) covers the active tab’s folder: text/Markdown, Excel, PDF and Word. Filter by type, open a grouped snippet at its match, and use “← Search results” to return. Scope, scan progress, unreadable counts and cancellation stay visible.
+- Cmd/Ctrl+F opens find in file; Enter / Shift+Enter moves next / previous, Esc closes it. Rendered Markdown, source, diffs, Word, Excel and PDF share highlights that survive redraws and automatic refresh. Find is unavailable while editing.
+- Shared NFKC phrase matching absorbs case, full-width characters and compatibility radicals such as PDF “注⽂” versus “注文”. CSS Custom Highlight API keeps the DOM intact so copying, diffs, Mermaid and table resizing continue to work.
+- Excel (xlsx / xlsm / xls) now previews all sheets with formatted cell values and row/column labels. PDFs use pdf.js with fit-width, zoom and text layers; lazy page rendering restores the selected match. Loading failures fall back to the built-in PDF viewer.
+- A persistent Worker handles parsing and caches extracted segments by file size and modification time, keeping heavy PDF/Excel work off the main process and speeding repeated searches.
+- ⚠ The first search reads every file, so it takes a while on a large workspace (about ten-odd seconds for ~6,000 files / ~200 MB of text). Later searches skip unchanged files and finish in under a second at the same size. For plain text only the normalized full text is cached, and only files that contain the term are re-read and split into lines (caching every line overflowed the cache budget and forced a full re-read each time).
+- ⚠ Matches stay within one text line, Excel cell, PDF page or Word paragraph. Limits: 2,000 matches total, 200 per file; 5,000 rows × 200 columns per sheet; first 1,000 PDF pages. Reaching a limit is shown. File limits: text 4 MB / Excel and Word 30 MB / PDF 50 MB.
+- ⚠ Symbolic links and development caches are skipped; overly broad roots such as the home folder or a drive root are refused. No OCR for image-only PDFs; fallback PDF viewing has no app highlights. Rendered Markdown clamps the source match ordinal to visible matches because URLs and other source-only text may be absent.
+
 ## v0.14.0
 
 **Give folder names a color, so todo and company are easy to spot in the tree.**

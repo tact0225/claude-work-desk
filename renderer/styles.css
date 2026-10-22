@@ -585,3 +585,38 @@ body.resizing.row { cursor: row-resize; }
 ::-webkit-scrollbar-thumb { background: #3d444f; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #4a5260; }
 ::-webkit-scrollbar-corner { background: transparent; }
+
+/* 検索はプレビュー本文を所有しない。Highlight の色だけを重ねる。 */
+::highlight(desk-find) { background-color: #ffdb5366; color: inherit; }
+::highlight(desk-find-current) { background-color: #ff9235cc; }
+/* PDF の文字は下の描画（canvas）側にあり、textLayer は透明な文字を重ねているだけ。濃い色を
+   重ねると肝心の文字が塗りつぶされて読めなくなるので、PDF の上だけ半透明にする */
+.textLayer ::highlight(desk-find-current) { background-color: #ff923573; }
+.textLayer ::highlight(desk-find) { background-color: #ffdb5359; }
+#workspace-search { width: 290px; min-width: 160px; max-width: 34vw; flex-shrink: 1; padding: 6px 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 5px; }
+#find-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+#find-bar[hidden] { display: none; }
+#find-input { width: 260px; max-width: 50%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 5px 8px; }
+#find-count { min-width: 70px; color: var(--muted); text-align: center; }
+#preview-body { position: relative; }
+.search-results, .sheet-preview { padding: 16px 20px 40px; }
+.search-scope { color: var(--muted); overflow-wrap: anywhere; }
+.search-filters { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
+.search-filters .toggled { color: var(--accent); border-color: var(--accent); }
+.search-file { border-top: 1px solid var(--border); padding: 12px 0; }
+.search-file h3 { font-size: 14px; overflow-wrap: anywhere; }
+.search-hit { display: flex; text-align: left; gap: 14px; width: 100%; padding: 8px; border: none; background: transparent; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.search-hit:hover { background: #ffffff0c; }
+.search-hit small { color: var(--muted); flex: 0 0 140px; }
+.search-hit mark { background: #ffdb53; color: #171a1f; }
+.search-warning { color: #e6af65; }
+.sheet-preview nav { display: flex; gap: 16px; flex-wrap: wrap; }
+.sheet-scroll { overflow: auto; }
+.sheet-preview table { border-collapse: collapse; font-size: 13px; }
+.sheet-preview td, .sheet-preview th { border: 1px solid var(--border); padding: 5px 10px; white-space: pre-wrap; min-width: 50px; max-width: 500px; overflow-wrap: anywhere; }
+.sheet-preview th { color: var(--muted); background: #22272e; }
+.desk-pdf-container { position: absolute; inset: 0; overflow: auto; background: #303238; }
+#find-bar button, .search-filters button, [data-search-expand] {
+  background: #2a3038; color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px; cursor: pointer;
+}
+.sheet-preview a { color: var(--accent); }

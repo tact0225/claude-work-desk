@@ -10,6 +10,12 @@ This app gives that back, as a single window: **drop anything onto it → it lan
 
 The other half is every frustration I had browsing my workspace in Obsidian: it opens nothing but Markdown (no code files, no docx), shows no line numbers so you can't tell Claude "line 120 looks wrong", and **you can't drag a file out to another app** (stock Obsidian hands over an `obsidian://` link instead of the file; getting the real file out takes a plugin). Here, Markdown renders, code gets highlighted with line numbers, PDFs/docx/images preview, and the tree drags real files out to any app with **plain OS drag-and-drop**.
 
+## Search and Excel preview
+
+Search beside the path field (**Cmd/Ctrl+Shift+F**, then Enter) scans text/Markdown, Excel, PDF and Word inside the active tab’s folder. Filter by type, watch progress, cancel, open a snippet at its match and return with “← Search results”. **Cmd/Ctrl+F** finds within the preview, source or diff (Enter: next, Shift+Enter: previous, Esc: close). NFKC matching handles case, full-width characters and PDF compatibility radicals. Excel (xlsx / xlsm / xls) shows all sheets with row/column labels; PDFs support fit-width and zoom.
+
+⚠ Find is unavailable while editing. Workspace search stops at 2,000 matches total / 200 per file. File limits: text 4 MB / Excel and Word 30 MB / PDF 50 MB; each sheet covers up to 5,000 rows × 200 columns, PDFs the first 1,000 pages. Limits and unreadable counts appear in results. No OCR for image-only PDFs.
+
 ## Install
 
 **No terminal needed.** Grab the installer for your OS from

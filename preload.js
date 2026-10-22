@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('api', {
   // ⚠ chooseRoot とは別物。こちらはパスを返すだけでワークスペース（_inboxの置き場）を変えない
   chooseFolder: (defaultPath) => ipcRenderer.invoke('choose-folder', defaultPath),
   readDir: (p) => ipcRenderer.invoke('read-dir', p),
+  searchStart: (request) => ipcRenderer.invoke('search-start', request),
+  searchCancel: (id) => ipcRenderer.invoke('search-cancel', id),
+  onSearchEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('search-event', listener)
+    return () => ipcRenderer.removeListener('search-event', listener)
+  },
   readFile: (p) => ipcRenderer.invoke('read-file', p),
   writeFile: (p, content) => ipcRenderer.invoke('write-file', p, content),
   resolveTarget: (input) => ipcRenderer.invoke('resolve-target', input),

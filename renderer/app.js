@@ -117,6 +117,7 @@ async function init() {
   applyFonts()
   setupDrop()
   setupGlobal()
+  setupSearch()
   setupPathBar()
   setupTabs()
   // ⚠ ルートピッカーで止まる経路でも腐り検知の窓口を空にしない。空文字だと幅が0になり、
@@ -885,7 +886,7 @@ function fileIcon(name) {
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'].includes(ext)) return '🖼️'
   if (ext === '.pdf') return '📕'
   if (['.docx', '.doc'].includes(ext)) return '📘'
-  if (['.xlsx', '.xls', '.csv'].includes(ext)) return '📊'
+  if (['.xlsx', '.xlsm', '.xls', '.csv'].includes(ext)) return '📊'
   if (['.py', '.js', '.ts', '.sh', '.gs', '.bat', '.ps1', '.html', '.css', '.json', '.yaml', '.yml'].includes(ext)) return '⚙️'
   return '📄'
 }
@@ -1017,13 +1018,21 @@ async function toggleWatch(dir, on) {
 
 async function openPreview(p) {
   if (!await leaveEditMode()) return false
+  const openEpoch = ++previewOpenEpoch
+  previewGeneration++
+  disposePdf()
+  clearFindHighlights()
+  resultsVisible = false
+  findIndex = 0
   const body = $('#preview-body')
   body.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
   let res
   try { res = await api.readFile(p) } catch (e) {
+    if (openEpoch !== previewOpenEpoch) return false
     body.innerHTML = `<div class="welcome error"><p>${escapeHtml(t('err.read', { msg: e.message }))}</p></div>`
     return false
   }
+  if (openEpoch !== previewOpenEpoch) return false
   currentFile = res
   previewMtime = res.mtimeMs
   externalChange = false
@@ -1040,6 +1049,7 @@ async function openPreview(p) {
   else setDiffBase(res)
   diffMode = false // 別のファイルに移ったら差分ビューは畳む（前のファイルの基準で開いたままにしない）
   renderPreview(res)
+  if (findIsOpen()) updateFind(true)
   // 開いた＝読んだ、とみなして未読を落とす。印が消えるのを待たずに先に描き替える
   // （IPCの往復ぶん色が残ると「クリックしたのに消えない」と見える）
   if (unreadKeys.has(pathKey(p))) {
@@ -1056,6 +1066,13 @@ function goBack() {
 }
 
 function renderPreview(res) {
+  resultsVisible = false
+  const savedPdf = pdfState?.path === res.path ? { top: pdfState.container.scrollTop, left: pdfState.container.scrollLeft, scale: pdfState.viewer.currentScaleValue } : null
+  const generation = ++previewGeneration
+  disposePdf()
+  pdfFindNavigate = false
+  clearFindHighlights()
+  scheduleFind()
   // ⚠ 差分は editable なファイルだけの道具。差分ビューを開いたまま 4MB を超えて育つと
   //    isEditable が false になり差分ボタンごと消えるが、diffMode を true のまま残すと
   //    ファイルが縮んで editable に戻った瞬間に「押していない差分ビュー」が復活する。
@@ -1063,6 +1080,20 @@ function renderPreview(res) {
   updatePreviewTitle(res)
   const actions = $('#preview-actions')
   actions.innerHTML = ''
+  if (workspaceResults && !editMode) {
+    const back = document.createElement('button')
+    back.textContent = t('search.back')
+    back.onclick = showSearchResults
+    actions.append(back)
+  }
+  if (res.kind === 'pdf' && !editMode) {
+    for (const [label, factor] of [['−', 1 / 1.2], ['＋', 1.2], [t('search.fit'), 0]]) {
+      const zoom = document.createElement('button')
+      zoom.textContent = label
+      zoom.onclick = () => pdfZoom(factor)
+      actions.append(zoom)
+    }
+  }
   if (navHistory.length && !editMode) {
     const btnBack = document.createElement('button')
     btnBack.textContent = '←'
@@ -1123,7 +1154,7 @@ function renderPreview(res) {
   const body = $('#preview-body')
   // ⚠ 入力モードの分岐を先に置く。順序を入れ替えると差分ビューが編集欄を押しのけ、
   //    書きかけの内容が画面から消える（入力中は差分を出さない、が仕様）
-  if (editMode && isEditable(res)) { renderEditor(res); return }
+  if (editMode && isEditable(res)) { closeFind(); renderEditor(res); return }
   if (diffMode && isEditable(res)) {
     if (renderDiff(res)) return
     // 見るものが無い（レナードが編集を巻き戻した等）＝差分ビューに取り残さず本文へ戻す。
@@ -1151,11 +1182,15 @@ function renderPreview(res) {
     case 'image':
       body.innerHTML = `<div class="media"><img src="${res.url}"></div>`
       break
+    case 'sheet':
+      body.innerHTML = sheetPreview(res.sheets)
+      break
     case 'pdf':
-      body.innerHTML = `<iframe class="pdfframe" src="${res.url}"></iframe>`
+      body.innerHTML = `<div class="loading">${escapeHtml(t('loading'))}</div>`
+      renderPdf(res, generation, savedPdf)
       break
     case 'toolarge':
-      body.innerHTML = `<div class="welcome"><p>${escapeHtml(t('preview.toolarge'))}</p></div>`
+      body.innerHTML = `<div class="welcome"><p>${escapeHtml(t('preview.toolarge', { limit: res.maxMB || 4 }))}</p></div>`
       break
     case 'binary':
       body.innerHTML = `<div class="welcome"><p>${escapeHtml(t('preview.unsupported'))}</p></div>`
@@ -1196,6 +1231,7 @@ function refreshDirty() {
 }
 
 function updatePreviewTitle(res) {
+  if (resultsVisible) { paintSearchResults(); return }
   const f = res || currentFile
   if (!f) return
   const mark = editMode ? (editDirty ? t('title.editingDirty') : t('title.editing')) : ''
@@ -2322,6 +2358,7 @@ async function pollTick() {
 
 // 開いているファイルが外部（レナード）に書き換えられたら読み直す
 async function refreshPreview(info) {
+  if (resultsVisible) return
   if (!currentFile || !info) return
   // 消えたファイルはそのまま出しておく（開いていた内容が突然消えるほうが困る）
   if (info.gone) return
@@ -2336,17 +2373,482 @@ async function refreshPreview(info) {
   //    印だけ出して、保存/破棄の判断は本田さんに委ねる。
   if (editMode) { previewMtime = info.mtimeMs; externalChange = true; updatePreviewTitle(); return }
   const target = currentFile.path
+  const openEpoch = previewOpenEpoch
   const body = $('#preview-body')
   const top = body.scrollTop
   let res
   try { res = await api.readFile(target) } catch (e) { return }
   // ⚠ 読んでいる間に別のファイルを開かれていたら捨てる。当てると
   //    「クリックしたのに一瞬前のファイルが出る」になる
-  if (!currentFile || currentFile.path !== target || editMode) return
+  if (!currentFile || currentFile.path !== target || editMode || resultsVisible || openEpoch !== previewOpenEpoch) return
   currentFile = res
   previewMtime = res.mtimeMs
   renderPreview(res)
   body.scrollTop = top // レナードが追記していくのを左側で追える（先頭に戻さない）
+}
+
+// ---------- 全文検索 / ファイル内検索 ----------
+// ⚠ Highlight API は DOM を変更しない。差分・コピー・表の列幅・Mermaid の所有権を奪わない。
+let workspaceResults = null
+let resultsVisible = false
+let workspaceSearchEpoch = 0
+let searchKind = ''
+let findIndex = 0
+let findMatches = []
+let findTimer = null
+let findNavigate = false
+const FIND_LIMIT = 10000
+let pdfState = null
+let pdfImports = null
+let pdfFindNavigate = false
+let previewGeneration = 0
+let previewOpenEpoch = 0
+
+function clearFindHighlights() {
+  CSS.highlights.delete('desk-find')
+  CSS.highlights.delete('desk-find-current')
+}
+function findIsOpen() { return !$('#find-bar').hidden }
+function closeFind() {
+  $('#find-bar').hidden = true
+  clearTimeout(findTimer)
+  findNavigate = false
+  clearFindHighlights()
+}
+function openFind(query, ordinal) {
+  if (editMode) { showToast(t('search.editing'), 2000); return }
+  if (resultsVisible || !currentFile) return
+  const wasOpen = findIsOpen()
+  $('#find-bar').hidden = false
+  if (query !== undefined) $('#find-input').value = query
+  if (ordinal !== undefined) findIndex = ordinal
+  else if (!wasOpen) findIndex = 0
+  updateFind(true)
+  $('#find-input').focus()
+  $('#find-input').select()
+}
+function scheduleFind(navigate = false) {
+  // ⚠ DOM 更新通知が入力直後に来ても、先頭へ移動する要求は失わない。
+  findNavigate ||= navigate === true
+  clearTimeout(findTimer)
+  findTimer = setTimeout(() => {
+    const requested = findNavigate
+    findNavigate = false
+    updateFind(requested)
+  }, 65)
+}
+
+function textNodes(root) {
+  const nodes = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.parentElement.closest('button, script, style, svg, .gutter, .endOfContent') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    },
+  })
+  let node
+  let length = 0
+  while ((node = walker.nextNode())) {
+    nodes.push({ node, start: length, end: length + node.length })
+    length += node.length
+  }
+  return nodes
+}
+function nodeSegment(nodes) { return { nodes, text: nodes.map(item => item.node.data).join(''), offset: 0 } }
+function lineSegments(nodes) {
+  const all = nodeSegment(nodes)
+  let offset = 0
+  return all.text.split('\n').map(text => {
+    const segment = { nodes, text, offset }
+    offset += text.length + 1
+    return segment
+  })
+}
+function domSegments() {
+  const body = $('#preview-body')
+  const code = body.querySelector('.codewrap pre.code code')
+  if (code) return lineSegments(textNodes(code))
+  if (currentFile?.kind === 'sheet') return [...body.querySelectorAll('[data-sheet-cell]')].map(cell => nodeSegment(textNodes(cell)))
+  if (diffMode) return [...body.querySelectorAll('.dtext')].map(line => nodeSegment(textNodes(line)))
+  const segments = []
+  const block = /^(P|LI|H[1-6]|TD|TH|BLOCKQUOTE|DT|DD|DIV|UL|OL|TABLE|TR|SECTION)$/
+  let pending = []
+  function flush() {
+    if (pending.length) {
+      let offset = 0
+      const nodes = pending.map(node => {
+        const item = { node, start: offset, end: offset + node.length }
+        offset += node.length
+        return item
+      })
+      segments.push(nodeSegment(nodes))
+      pending = []
+    }
+  }
+  function visit(node) {
+    if (node.nodeType === Node.TEXT_NODE) { pending.push(node); return }
+    if (node.nodeType !== Node.ELEMENT_NODE || node.matches('button, script, style, svg, .gutter')) return
+    if (node.tagName === 'PRE') { flush(); segments.push(...lineSegments(textNodes(node))); return }
+    const boundary = block.test(node.tagName) || node.tagName === 'BR'
+    if (boundary) flush()
+    for (const child of node.childNodes) visit(child)
+    if (boundary) flush()
+  }
+  visit(body)
+  flush()
+  return segments
+}
+function segmentRange(segment, start, end) {
+  start += segment.offset || 0
+  end += segment.offset || 0
+  const first = segment.nodes.find(item => item.end > start)
+  const last = segment.nodes.find(item => item.end >= end && item.start < end)
+  if (!first || !last) return null
+  const range = new Range()
+  range.setStart(first.node, start - first.start)
+  range.setEnd(last.node, end - last.start)
+  return range
+}
+function scrollFindRange(range) {
+  const body = $('#preview-body')
+  // ⚠ 内側の表から外側へ寄せ、preview-body より上（ページ全体）は動かさない。
+  let ancestor = range.startContainer.parentElement
+  while (ancestor) {
+    const rect = range.getBoundingClientRect()
+    const bounds = ancestor.getBoundingClientRect()
+    const style = getComputedStyle(ancestor)
+    const top = /(auto|scroll)/.test(style.overflowY) && ancestor.scrollHeight > ancestor.clientHeight
+      ? rect.top + rect.height / 2 - bounds.top - ancestor.clientHeight / 2 : 0
+    const left = /(auto|scroll)/.test(style.overflowX) && ancestor.scrollWidth > ancestor.clientWidth
+      ? rect.left + rect.width / 2 - bounds.left - ancestor.clientWidth / 2 : 0
+    if (top || left) ancestor.scrollBy({ top, left })
+    if (ancestor === body) break
+    ancestor = ancestor.parentElement
+  }
+}
+function updateFind(navigate = false) {
+  clearFindHighlights()
+  if (!findIsOpen() || resultsVisible || editMode) return
+  if (navigate && currentFile?.kind === 'pdf' && !pdfState?.pages) pdfFindNavigate = true
+  const normQuery = DeskSearch.normalizeWithMap($('#find-input').value.trim()).norm
+  findMatches = []
+  if (normQuery) {
+    if (pdfState?.pages) {
+      // ⚠ ページ描画ごとに全PDFを再検索すると、遅延描画のたびにUIが止まる。
+      if (pdfState.normQuery !== normQuery) {
+        pdfState.matches = []
+        pdfState.pages.forEach((text, index) => {
+          if (pdfState.matches.length > FIND_LIMIT) return
+          for (const [start, end] of DeskSearch.findInSegment(text, normQuery, FIND_LIMIT + 1 - pdfState.matches.length)) pdfState.matches.push({ page: index + 1, start, end })
+        })
+        pdfState.normQuery = normQuery
+      }
+      findMatches = pdfState.matches
+    } else if (currentFile?.kind !== 'pdf') {
+      for (const segment of domSegments()) {
+        if (findMatches.length > FIND_LIMIT) break
+        for (const [start, end] of DeskSearch.findInSegment(segment.text, normQuery, FIND_LIMIT + 1 - findMatches.length)) {
+          const range = segmentRange(segment, start, end)
+          if (range) findMatches.push({ range })
+        }
+      }
+    }
+  }
+  const findLimited = findMatches.length > FIND_LIMIT
+  if (findLimited) findMatches = findMatches.slice(0, FIND_LIMIT)
+  // PDF の全ページ抽出前には、横断検索から渡された ordinal を消さずに待つ。
+  if (!(currentFile?.kind === 'pdf' && !pdfState?.pages)) findIndex = Math.max(0, Math.min(findIndex, findMatches.length - 1))
+  $('#find-count').textContent = `${findMatches.length ? findIndex + 1 : 0} / ${findLimited ? '10,000+' : findMatches.length}`
+  if (pdfState?.searchFailed) $('#find-count').textContent = t('search.pdfUnavailable')
+  const all = new Highlight()
+  const active = new Highlight()
+  const current = findMatches[findIndex]
+  if (navigate && current?.page && pdfState) {
+    const layer = pdfState.container.querySelector(`.page[data-page-number="${current.page}"] .textLayer`)
+    if (!layer?.childNodes.length) pdfState.pendingPage = current.page
+    pdfState.viewer.scrollPageIntoView({ pageNumber: current.page })
+  }
+  const pageSegments = new Map()
+  findMatches.forEach((match, index) => {
+    let range = match.range
+    if (match.page && pdfState) {
+      if (!pageSegments.has(match.page)) {
+        const layer = pdfState.container.querySelector(`.page[data-page-number="${match.page}"] .textLayer`)
+        pageSegments.set(match.page, layer ? nodeSegment(textNodes(layer)) : null)
+      }
+      const segment = pageSegments.get(match.page)
+      if (segment) range = segmentRange(segment, match.start, match.end)
+    }
+    if (!range) return
+    all.add(range)
+    if (index === findIndex) {
+      active.add(range)
+      if (navigate && !match.page) scrollFindRange(range)
+      if (navigate && match.page && pdfState) {
+        const bounds = pdfState.container.getBoundingClientRect()
+        pdfState.container.scrollTop += range.getBoundingClientRect().top - bounds.top - bounds.height / 2
+        pdfState.pendingPage = null
+      }
+    }
+  })
+  CSS.highlights.set('desk-find', all)
+  CSS.highlights.set('desk-find-current', active)
+}
+function stepFind(direction) {
+  if (findMatches.length) findIndex = (findIndex + direction + findMatches.length) % findMatches.length
+  updateFind(true)
+}
+
+function sheetPreview(sheets) {
+  let html = '<div class="sheet-preview"><nav>'
+  sheets.forEach((sheet, index) => { html += `<a href="#desk-sheet-${index}">${escapeHtml(sheet.name)}</a> ` })
+  html += '</nav>'
+  sheets.forEach((sheet, index) => {
+    html += `<h2 id="desk-sheet-${index}">${escapeHtml(sheet.name)}</h2>`
+    if (sheet.truncated) html += `<p class="search-warning">${escapeHtml(t('search.sheetLimit'))}</p>`
+    html += '<div class="sheet-scroll"><table><thead><tr><th></th>'
+    for (let col = 0; col < (sheet.rows[0]?.length || 0); col++) html += `<th>${DeskSearch.columnName(col)}</th>`
+    html += '</tr></thead><tbody>'
+    sheet.rows.forEach((row, r) => {
+      html += `<tr><th>${r + 1}</th>`
+      for (const text of row) html += `<td data-sheet-cell>${escapeHtml(text)}</td>`
+      html += '</tr>'
+    })
+    html += '</tbody></table></div>'
+  })
+  return html + '</div>'
+}
+
+function disposePdf() {
+  const state = pdfState
+  pdfState = null
+  if (!state) return
+  state.resize?.disconnect()
+  state.abort?.abort()
+  state.viewer?.setDocument(null)
+  state.link?.setDocument(null)
+  if (state.task) state.task.destroy().catch(() => {})
+}
+async function loadPdfModules() {
+  if (!pdfImports) pdfImports = (async () => {
+    const pdfjs = await import('../node_modules/pdfjs-dist/build/pdf.mjs')
+    pdfjs.GlobalWorkerOptions.workerSrc = '../node_modules/pdfjs-dist/build/pdf.worker.mjs'
+    globalThis.pdfjsLib = pdfjs
+    const viewer = await import('../node_modules/pdfjs-dist/web/pdf_viewer.mjs')
+    return { pdfjs, ...viewer }
+  })().catch(err => { pdfImports = null; throw err })
+  return pdfImports
+}
+async function renderPdf(res, generation, saved = null) {
+  const body = $('#preview-body')
+  try {
+    const { pdfjs, EventBus, PDFLinkService, PDFViewer } = await loadPdfModules()
+    if (generation !== previewGeneration) return
+    body.innerHTML = '<div class="desk-pdf-container"><div class="pdfViewer"></div></div>'
+    const container = body.firstElementChild
+    const bus = new EventBus()
+    const link = new PDFLinkService({ eventBus: bus })
+    const abort = new AbortController()
+    const viewer = new PDFViewer({ abortSignal: abort.signal, container, viewer: container.firstElementChild, eventBus: bus, linkService: link, textLayerMode: 1, annotationMode: 0, isEvalSupported: false })
+    link.setViewer(viewer)
+    const task = pdfjs.getDocument({
+      url: res.url, isEvalSupported: false, useSystemFonts: true,
+      cMapUrl: new URL('../node_modules/pdfjs-dist/cmaps/', location.href).href, cMapPacked: true,
+      standardFontDataUrl: new URL('../node_modules/pdfjs-dist/standard_fonts/', location.href).href,
+      wasmUrl: new URL('../node_modules/pdfjs-dist/wasm/', location.href).href,
+    })
+    const state = { container, viewer, link, task, abort, pages: null, path: res.path }
+    pdfState = state
+    bus.on('pagesinit', () => {
+      if (pdfState !== state) return
+      viewer.currentScaleValue = saved?.scale || 'page-width'
+      if (saved) { container.scrollTop = saved.top; container.scrollLeft = saved.left }
+    })
+    bus.on('textlayerrendered', event => {
+      if (pdfState !== state) return
+      updateFind(false)
+      const current = findMatches[findIndex]
+      if (state.pendingPage === event.pageNumber && current?.page === event.pageNumber) {
+        state.pendingPage = null
+        updateFind(true)
+      }
+    })
+    state.resize = new ResizeObserver(() => {
+      if (pdfState === state && viewer.currentScaleValue === 'page-width') viewer.currentScaleValue = 'page-width'
+    })
+    state.resize.observe(container)
+    const doc = await task.promise
+    if (pdfState !== state || generation !== previewGeneration) return
+    link.setDocument(doc)
+    viewer.setDocument(doc)
+    const pages = []
+    try {
+      for (let page = 1; page <= Math.min(doc.numPages, 1000); page++) {
+        if (pdfState !== state) return
+        const item = await doc.getPage(page)
+        pages.push(DeskSearch.pageText(await item.getTextContent(DeskSearch.PDF_TEXT_OPTIONS)))
+      }
+    } catch (err) {
+      if (pdfState !== state) return
+      state.searchFailed = true
+      state.pendingPage = null
+      pdfFindNavigate = false
+      showToast(t('search.pdfUnavailable'), 4000)
+      updateFind(false)
+      return
+    }
+    if (pdfState !== state) return
+    state.pages = pages
+    if (doc.numPages > 1000) showToast(t('search.pdfLimit'), 4000)
+    updateFind(false)
+    if (findIsOpen() && findMatches[findIndex] && (!saved || pdfFindNavigate)) {
+      pdfFindNavigate = false
+      state.pendingPage = findMatches[findIndex].page
+      updateFind(true)
+    }
+  } catch (err) {
+    if (generation !== previewGeneration) return
+    disposePdf()
+    body.innerHTML = `<p class="search-warning">${escapeHtml(t('search.pdfFallback'))}</p><iframe class="pdfframe" src="${res.url}"></iframe>`
+  }
+}
+function pdfZoom(factor) {
+  if (!pdfState) return
+  if (factor === 0) pdfState.viewer.currentScaleValue = 'page-width'
+  else pdfState.viewer.currentScale = Math.max(0.25, Math.min(5, pdfState.viewer.currentScale * factor))
+}
+
+async function startWorkspaceSearch() {
+  if (!await leaveEditMode()) return
+  const query = $('#workspace-search').value.trim()
+  if (!query) return
+  const epoch = ++workspaceSearchEpoch
+  if (workspaceResults?.id) api.searchCancel(workspaceResults.id)
+  workspaceResults = { query, root: browseRoot, groups: [], total: 0, files: 0, scanned: 0, failed: 0, running: true, expanded: new Set() }
+  showSearchResults()
+  // 新しい検索は先頭から見せる（直前に読んでいたファイルのスクロール位置を引き継がない）。
+  // 「← 検索結果」で戻る時は showSearchResults だけを通るので、そちらは位置を保つ。
+  $('#preview-body').scrollTop = 0
+  try {
+    const response = await api.searchStart({ query, root: workspaceResults.root, kinds: searchKind ? [searchKind] : [] })
+    if (epoch !== workspaceSearchEpoch) return
+    if (response.error) { workspaceResults.error = t('search.broad'); workspaceResults.running = false }
+    else {
+      workspaceResults.id = response.id
+      if (workspaceResults.cancelRequested) api.searchCancel(response.id)
+      for (const event of workspaceResults.pendingEvents || []) receiveSearchEvent(event)
+      workspaceResults.pendingEvents = []
+    }
+  } catch (err) {
+    if (epoch !== workspaceSearchEpoch) return
+    workspaceResults.error = t('search.error', { detail: err.message })
+    workspaceResults.running = false
+  }
+  if (epoch === workspaceSearchEpoch && resultsVisible) paintSearchResults(false)
+}
+function showSearchResults() {
+  if (!workspaceResults || editMode) return
+  resultsVisible = true
+  previewGeneration++
+  previewOpenEpoch++
+  disposePdf()
+  clearFindHighlights()
+  $('#find-bar').hidden = true
+  paintSearchResults()
+}
+function searchPosition(hit) {
+  if (hit.line) return t('search.line', { n: hit.line })
+  if (hit.sheet !== undefined) return t('search.cell', { sheet: hit.sheet, cell: hit.cell })
+  if (hit.page) return t('search.page', { n: hit.page })
+  return t('search.paragraph', { n: hit.paragraph })
+}
+function paintSearchResults(reset = true) {
+  if (!resultsVisible || !workspaceResults) return
+  const state = workspaceResults
+  $('#preview-title').title = ''
+  $('#preview-title').classList.remove('editing', 'external')
+  $('#preview-title').textContent = t('search.results', { query: state.query, n: state.total, files: state.files })
+  const actions = $('#preview-actions')
+  if (reset) {
+    actions.innerHTML = ''
+    if (!state.cancelButton) {
+      state.cancelButton = document.createElement('button')
+      state.cancelButton.textContent = t('search.cancel')
+      state.cancelButton.onclick = () => { state.cancelRequested = true; if (state.id) api.searchCancel(state.id) }
+    }
+    actions.append(state.cancelButton)
+    let html = `<div class="search-results"><div class="search-scope">${escapeHtml(t('search.scope', { root: state.root }))}</div><div class="search-filters">`
+    const filters = [['', t('search.all')], ['text', t('search.text')], ['sheet', t('search.excel')], ['pdf', t('search.pdf')], ['word', t('search.word')]]
+    filters.forEach(([kind, label]) => { html += `<button data-search-kind="${kind}" class="${searchKind === kind ? 'toggled' : ''}">${escapeHtml(label)}</button>` })
+    html += '</div><p data-search-progress></p><p data-search-error class="search-warning"></p><p data-search-failed class="search-warning"></p><p data-search-limit class="search-warning"></p><div data-search-groups></div></div>'
+    $('#preview-body').innerHTML = html
+    state.paintedGroups = 0
+  }
+  // ⚠ ストリーミング中はクリック対象を保持する。件数だけ更新し、既存グループを作り直さない。
+  state.cancelButton.hidden = !state.running
+  const body = $('#preview-body')
+  body.querySelector('[data-search-progress]').textContent = state.running ? t('search.progress', { n: state.scanned }) : state.cancelled ? t('search.stopped') : ''
+  body.querySelector('[data-search-error]').textContent = state.error || ''
+  body.querySelector('[data-search-failed]').textContent = state.failed ? t('search.failed', { n: state.failed }) : ''
+  body.querySelector('[data-search-limit]').textContent = state.limited ? t('search.limit') : ''
+  let html = ''
+  state.groups.forEach((group, index) => {
+    if (index < state.paintedGroups) return
+    html += `<section class="search-file"><h3>${fileIcon(group.relative)} ${escapeHtml(group.relative)} (${group.hits.length})</h3>`
+    if (group.limited) html += `<p class="search-warning">${escapeHtml(t('search.fileLimit'))}</p>`
+    const visible = state.expanded.has(index) ? group.hits : group.hits.slice(0, 5)
+    visible.forEach(hit => {
+      html += `<button class="search-hit" data-group="${index}" data-ordinal="${hit.ordinal}"><small>${escapeHtml(searchPosition(hit))}</small><span>${escapeHtml(hit.snippet.before)}<mark>${escapeHtml(hit.snippet.match)}</mark>${escapeHtml(hit.snippet.after)}</span></button>`
+    })
+    if (visible.length < group.hits.length) html += `<button data-search-expand="${index}">${escapeHtml(t('search.more', { n: group.hits.length - 5 }))}</button>`
+    html += '</section>'
+  })
+  body.querySelector('[data-search-groups]').insertAdjacentHTML('beforeend', html)
+  state.paintedGroups = state.groups.length
+}
+function receiveSearchEvent(event) {
+  const state = workspaceResults
+  if (!state) return
+  // IPC の返事より Worker の最初のイベントが先に届いても、検索結果を落とさない。
+  if (!state.id && state.running) { (state.pendingEvents ||= []).push(event); return }
+  if (event.id !== state.id) return
+  if (event.results) state.groups.push(...event.results)
+  for (const key of ['total', 'files', 'scanned', 'failed', 'limited', 'cancelled', 'error']) if (event[key] !== undefined) state[key] = event[key]
+  if (event.error) state.error = t('search.error', { detail: event.error })
+  if (event.type === 'done') state.running = false
+  if (resultsVisible) paintSearchResults(false)
+}
+function isFindShortcut(event) {
+  return event.ctrlKey !== event.metaKey && !event.altKey && event.key.toLowerCase() === 'f'
+}
+function setupSearch() {
+  const input = $('#workspace-search')
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); startWorkspaceSearch() }
+    if (event.key === 'Escape') { input.value = ''; event.stopPropagation() }
+  })
+  $('#find-input').addEventListener('input', () => { findIndex = 0; scheduleFind(true) })
+  $('#find-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); clearTimeout(findTimer); findNavigate = false; updateFind(false); stepFind(event.shiftKey ? -1 : 1) }
+    if (event.key === 'Escape') { event.stopPropagation(); closeFind() }
+  })
+  $('#find-prev').onclick = () => stepFind(-1)
+  $('#find-next').onclick = () => stepFind(1)
+  $('#find-close').onclick = closeFind
+  $('#preview-body').addEventListener('click', async event => {
+    const filter = event.target.closest('[data-search-kind]')
+    if (filter) { searchKind = filter.dataset.searchKind; $('#workspace-search').value = workspaceResults.query; startWorkspaceSearch(); return }
+    const expand = event.target.closest('[data-search-expand]')
+    if (expand) { workspaceResults.expanded.add(Number(expand.dataset.searchExpand)); paintSearchResults(); return }
+    const hit = event.target.closest('.search-hit')
+    if (!hit || !workspaceResults) return
+    const group = workspaceResults.groups[Number(hit.dataset.group)]
+    const query = workspaceResults.query
+    const ordinal = Number(hit.dataset.ordinal)
+    if (await openPreview(group.path)) openFind(query, ordinal)
+  })
+  api.onSearchEvent(receiveSearchEvent)
+  // 再描画・差分の展開・Mermaid 完了・遅延 textLayer をまとめて拾う。
+  new MutationObserver(scheduleFind).observe($('#preview-body'), { childList: true, characterData: true, subtree: true })
 }
 
 // ---------- グローバル ----------
@@ -2610,10 +3112,16 @@ function setupGlobal() {
   window.addEventListener('keydown', (e) => {
     // 文字を打つ場所（入力モードのtextarea・パス欄・設定の入力）ではアプリのショートカットを譲る。
     // 特に Ctrl+V は _inbox 投入に奪われると編集中に貼り付けられなくなる。
+    if (isFindShortcut(e)) {
+      e.preventDefault()
+      if (e.shiftKey) { $('#workspace-search').focus(); $('#workspace-search').select() }
+      else openFind()
+      return
+    }
     const typing = isTypingTarget(e.target)
     if (e.key === 'F5' && !typing) { e.preventDefault(); loadTreeRoot() }
     if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack() }
-    if (e.key === 'Escape') { hideCtxMenu(); hidePathHist(); $('#settings-overlay').classList.remove('show') }
+    if (e.key === 'Escape') { if (findIsOpen()) closeFind(); hideCtxMenu(); hidePathHist(); $('#settings-overlay').classList.remove('show') }
     if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteToInbox() }
     // ズームも Ctrl/Cmd 両対応（macOS の Cmd+ / Cmd- / Cmd+0）。上の保存・貼り付けと同じ書き方に揃える
     const mod = e.ctrlKey || e.metaKey

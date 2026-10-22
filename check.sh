@@ -8,7 +8,7 @@ FAIL=0
 note() { echo "  $1"; }
 fail() { echo "NG  $1"; FAIL=1; }
 
-JS_FILES="main.js preload.js wikilink.js folder-color.js renderer/app.js renderer/i18n.js"
+JS_FILES="main.js preload.js wikilink.js folder-color.js renderer/app.js renderer/i18n.js renderer/search-core.js search-worker.js search-engine.js test-search.js"
 
 # 1) 構文
 for f in $JS_FILES; do
@@ -188,6 +188,9 @@ fi
 
 # 11) フォルダ色の保存キー（相対化・解決・表記差）
 node test-folder-color.js || fail "フォルダ色の保存／解決が壊れている"
+
+# 12) 全文検索（Worker）とプレビュー共通の正規化・位置・抽出順
+node test-search.js || fail "検索の照合／抽出／Worker が壊れている"
 
 echo
 [ $FAIL -eq 0 ] && { echo "check.sh: PASS"; exit 0; } || { echo "check.sh: FAIL"; exit 1; }

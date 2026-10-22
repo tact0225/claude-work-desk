@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>claude-work Desk</title>
 <link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css">
+<link rel="stylesheet" href="../node_modules/pdfjs-dist/web/pdf_viewer.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,6 +18,7 @@
     <button id="btn-path-hist" data-i18n-title="tip.history">▾</button>
     <div id="path-hist"></div>
   </div>
+  <input id="workspace-search" type="search" spellcheck="false" data-i18n-ph="search.placeholder">
 </div>
 <div id="app">
   <aside id="sidebar">
@@ -41,6 +43,13 @@
       <div id="preview-header">
         <span id="preview-title" data-i18n="preview.empty"></span>
         <span id="preview-actions"></span>
+      </div>
+      <div id="find-bar" hidden>
+        <input id="find-input" type="search" data-i18n-ph="search.find">
+        <span id="find-count">0 / 0</span>
+        <button id="find-prev" data-i18n-title="search.previous">↑</button>
+        <button id="find-next" data-i18n-title="search.next">↓</button>
+        <button id="find-close" data-i18n-title="search.close">✕</button>
       </div>
       <div id="preview-body">
         <div class="welcome">
@@ -119,6 +128,7 @@
      読み込みに失敗しても app.js 側が window.mermaid の不在を見てコードブロック表示に落とす -->
 <script src="vendor/mermaid.min.js"></script>
 <script src="i18n.js"></script>
+<script src="search-core.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
